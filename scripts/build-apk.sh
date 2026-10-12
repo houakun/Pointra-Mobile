@@ -10,7 +10,9 @@
 # 在已开启开发者模式的机器上，直接 `pnpm tauri android build --debug` 即可。
 #
 # 用法：
-#   scripts/build-apk.sh [x86_64|aarch64|armv7|i686]   (默认 x86_64)
+#   scripts/build-apk.sh [x86_64|aarch64|armv7|i686]
+#     x86_64  → 模拟器（默认）
+#     aarch64 → 真机（几乎全部 Android 手机）
 set -euo pipefail
 
 ABI="${1:-x86_64}"
@@ -20,13 +22,18 @@ cd "$ROOT"
 # ASCII 目标目录（默认落在用户目录下，避免中文路径）
 export CARGO_TARGET_DIR="${POINTRA_TARGET_DIR:-$HOME/.pointra-mobile-target}"
 
+# 【易错点】jniLibs 的子目录名是 **Android ABI 名**，不是 Rust 三 元组名：
+#   写成 jniLibs/aarch64/ 会被 AGP 拒绝：
+#   "out extracted from path ...\jniLibs\aarch64\libpointra_mobile.so is not an ABI"
+# Flavor 名则来自 tauri 的 archList（arm64/arm/x86/x86_64）。
 case "$ABI" in
-  x86_64)  FLAVOR="X86_64" ;;
-  aarch64) FLAVOR="Arm64" ;;
-  armv7)   FLAVOR="Arm" ;;
-  i686)    FLAVOR="X86" ;;
+  x86_64)  FLAVOR="X86_64"; JNI_DIR="x86_64" ;;
+  aarch64) FLAVOR="Arm64";  JNI_DIR="arm64-v8a" ;;
+  armv7)   FLAVOR="Arm";    JNI_DIR="armeabi-v7a" ;;
+  i686)    FLAVOR="X86";    JNI_DIR="x86" ;;
   *) echo "未知 ABI: $ABI" >&2; exit 1 ;;
 esac
+FLAVOR_LC="$(echo "$FLAVOR" | tr '[:upper:]' '[:lower:]')"
 
 echo "==> 1/3 构建前端"
 pnpm build
@@ -40,13 +47,31 @@ if [[ ! -f "$SO" ]]; then
   exit 1
 fi
 
-DEST="src-tauri/gen/android/app/src/main/jniLibs/$ABI"
+JNI_ROOT="src-tauri/gen/android/app/src/main/jniLibs"
+DEST="$JNI_ROOT/$JNI_DIR"
 mkdir -p "$DEST"
 cp "$SO" "$DEST/libpointra_mobile.so"
+
+# jniLibs 下若残留 ABI 名不合法的目录（例如手误建的 aarch64/），AGP 会直接报错，
+# 这里提示一下，由人确认后手动清理（脚本不替用户批量删目录）。
+for d in "$JNI_ROOT"/*/; do
+  name="$(basename "$d")"
+  case "$name" in
+    arm64-v8a|armeabi-v7a|x86|x86_64) ;;
+    *) echo "⚠ 发现非 ABI 目录：$JNI_ROOT/$name —— 会让 Gradle 报 'is not an ABI'，请手动清理" >&2 ;;
+  esac
+done
 
 echo "==> 3/3 Gradle 打包"
 cd src-tauri/gen/android
 ./gradlew ":app:assemble${FLAVOR}Debug" --console=plain
 
+APK="$ROOT/src-tauri/gen/android/app/build/outputs/apk/$FLAVOR_LC/debug/app-$FLAVOR_LC-debug.apk"
 echo
-echo "APK: $ROOT/src-tauri/gen/android/app/build/outputs/apk/$ABI/debug/app-$ABI-debug.apk"
+if [[ -f "$APK" ]]; then
+  echo "APK: $APK ($(( $(stat -c%s "$APK") / 1048576 )) MB)"
+else
+  echo "APK 未在预期位置：$APK" >&2
+  find "$ROOT/src-tauri/gen/android/app/build/outputs/apk" -name "*.apk" >&2
+  exit 1
+fi
