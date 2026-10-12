@@ -12,6 +12,8 @@ src-tauri/gen/android/.gradle/
 src-tauri/gen/android/build/
 src-tauri/gen/android/app/build/
 src-tauri/gen/android/local.properties
+# Release 签名配置（含密钥路径与密码）绝不进版本库
+src-tauri/gen/android/keystore.properties
 # jniLibs 里的 .so 由 scripts/build-apk.sh 拷贝，不进版本库
 src-tauri/gen/android/app/src/main/jniLibs/
 

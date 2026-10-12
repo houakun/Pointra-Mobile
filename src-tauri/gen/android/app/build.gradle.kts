@@ -14,6 +14,17 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Release 签名：密钥与密码放在**仓库外**的 keystore.properties（已 gitignore）。
+// 文件不存在时 release 包会保持未签名——Gradle 不会报错，但手机装不上，
+// 所以 scripts/build-apk.sh 在打 release 前会先检查这个文件。
+val keystoreProperties = Properties().apply {
+    val propFile = rootProject.file("keystore.properties")
+    if (propFile.exists()) {
+        propFile.inputStream().use { load(it) }
+    }
+}
+val hasReleaseKey = keystoreProperties.getProperty("storeFile") != null
+
 android {
     compileSdk = 37
     namespace = "com.syjun.pointra.mobile"
@@ -25,6 +36,16 @@ android {
         targetSdk = 37
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    signingConfigs {
+        if (hasReleaseKey) {
+            create("release") {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -40,6 +61,10 @@ android {
             }
         }
         getByName("release") {
+            // 没配 keystore.properties 时保持未签名（仍能出包，但装不了）
+            if (hasReleaseKey) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             optimization {
                enable = true
             }

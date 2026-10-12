@@ -27,3 +27,11 @@ futures-util = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+
+[profile.release]
+# 手机安装包体积敏感：debug 包 163MB，加上这些后 release 通常只剩十几 MB。
+# strip 同时会去掉符号表（崩溃栈会不好看，个人自用可接受）。
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
