@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { api } from "../api";
 import type { Accent, Settings, SyncProgress } from "../types";
 
@@ -14,6 +15,14 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
   const [deviceName, setDeviceName] = useState("Android");
   const [busy, setBusy] = useState<string | null>(null);
   const [progress, setProgress] = useState<SyncProgress | null>(null);
+  /** 版本号取自构建时注入的 tauri.conf.json，取不到就退回静态值（权限缺失也不会白屏） */
+  const [version, setVersion] = useState("0.2.0");
+
+  useEffect(() => {
+    getVersion()
+      .then(setVersion)
+      .catch(() => undefined);
+  }, []);
 
   const pairing = settings.pairing;
 
@@ -242,7 +251,7 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
       </div>
 
       <div className="muted" style={{ textAlign: "center", padding: "4px 0 20px" }}>
-        Pointra Mobile v0.1.0
+        Pointra Mobile v{version}
       </div>
     </div>
   );
