@@ -105,3 +105,19 @@ export interface SyncProgress {
 }
 
 export type StateFilter = "all" | "new" | "learning" | "review" | "mastered";
+
+/** 电脑端发布的新版本信息（`GET /api/app/latest`） */
+export interface UpdateInfo {
+  version: string;
+  version_code: number;
+  size: number;
+  sha256: string;
+  /** 远端版本是否高于本机 */
+  newer: boolean;
+}
+
+/** 下载进度事件 `update://progress` 的载荷 */
+export interface UpdateProgress {
+  downloaded: number;
+  total: number;
+}

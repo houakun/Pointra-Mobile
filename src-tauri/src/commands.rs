@@ -643,6 +643,30 @@ mod tests {
         assert_eq!(card.exchange["word_pl"][0], "apples");
     }
 
+    /// 服务端只发 version/version_code/size/sha256，`newer` 是客户端算的：
+    /// 少了 `#[serde(default)]` 就会整包解不出来（端到端实测踩过）。
+    #[test]
+    fn update_info_parses_server_payload_without_newer() {
+        let raw = r#"{"version":"0.2.1","version_code":2001,"size":9761445,"sha256":"abc"}"#;
+        let info: UpdateInfo = serde_json::from_str(raw).unwrap();
+        assert_eq!(info.version, "0.2.1");
+        assert_eq!(info.version_code, 2001);
+        assert!(!info.newer);
+        assert!(parse_version(&info.version) > parse_version("0.2.0"));
+    }
+
+    /// 版本比较：自更新靠它判断「远端是否更新」，不能拿字符串直接比。
+    #[test]
+    fn version_compare_is_numeric_not_lexicographic() {
+        assert!(parse_version("0.3.0") > parse_version("0.2.9"));
+        // 字符串比较会把 "0.2.10" 判成小于 "0.2.9"，数值比较才对
+        assert!(parse_version("0.2.10") > parse_version("0.2.9"));
+        assert_eq!(parse_version("0.2"), (0, 2, 0));
+        assert_eq!(parse_version("1.2.3"), (1, 2, 3));
+        assert_eq!(parse_version("garbage"), (0, 0, 0));
+        assert!(!(parse_version("0.2.0") > parse_version("0.2.0")));
+    }
+
     #[test]
     fn sentence_card_has_empty_exchange() {
         let conn = db::open_in_memory().unwrap();
@@ -664,6 +688,109 @@ mod tests {
             .map(|o| o.is_empty())
             .unwrap_or(false));
     }
+}
+
+// ---------------------------------------------------------------------------
+// 手机端自更新（A 方案：新版本从 PC 端同步服务拉）
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateInfo {
+    pub version: String,
+    pub version_code: i64,
+    pub size: u64,
+    pub sha256: String,
+    /// 远端版本是否高于本机（false = 电脑端放的是同版本或更旧）。
+    /// **服务端不下发这个字段**，由客户端算，所以必须 `default`，
+    /// 否则反序列化会报 “missing field `newer`”。
+    #[serde(default)]
+    pub newer: bool,
+}
+
+/// 把 `x.y.z` 拆成可比较的数字（缺段/非数字按 0，不 panic）。
+fn parse_version(v: &str) -> (u64, u64, u64) {
+    let mut parts = v.trim().split('.').map(|p| p.parse::<u64>().unwrap_or(0));
+    (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    )
+}
+
+/// 问电脑端有没有新版本。`Ok(None)` = 电脑端还没发布（http 404）。
+#[tauri::command]
+pub async fn check_update(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<UpdateInfo>, String> {
+    let (base, _) = current_pairing(&state)?;
+    let url = format!("{}/api/app/latest", base.trim_end_matches('/'));
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await
+        .map_err(|e| format!("无法连接电脑端：{e}"))?;
+
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !resp.status().is_success() {
+        return Err(format!("电脑端返回 {}", resp.status()));
+    }
+    let mut info: UpdateInfo = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析版本信息失败：{e}"))?;
+    let local = app.package_info().version.to_string();
+    info.newer = parse_version(&info.version) > parse_version(&local);
+    Ok(Some(info))
+}
+
+/// 下载 APK 到应用缓存目录（该目录已被 manifest 里的 FileProvider 暴露），
+/// 返回本地路径——由前端再交给系统安装器。
+#[tauri::command]
+pub async fn download_update(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    use futures_util::StreamExt;
+    use std::io::Write;
+
+    let (base, _) = current_pairing(&state)?;
+    let url = format!("{}/api/app/download", base.trim_end_matches('/'));
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("下载失败：{e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("电脑端返回 {}", resp.status()));
+    }
+    let total = resp.content_length().unwrap_or(0);
+
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("取缓存目录失败：{e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建缓存目录失败：{e}"))?;
+    let dest = dir.join("pointra-update.apk");
+
+    let mut file = std::fs::File::create(&dest).map_err(|e| format!("创建文件失败：{e}"))?;
+    let mut downloaded: u64 = 0;
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("下载中断：{e}"))?;
+        file.write_all(&chunk)
+            .map_err(|e| format!("写入失败：{e}"))?;
+        downloaded += chunk.len() as u64;
+        let _ = app.emit(
+            "update://progress",
+            json!({ "downloaded": downloaded, "total": total }),
+        );
+    }
+    file.flush().map_err(|e| format!("写入失败：{e}"))?;
+    Ok(dest.to_string_lossy().to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -710,6 +837,8 @@ pub fn run() {
             start_events,
             stop_events,
             reset_all,
+            check_update,
+            download_update,
         ])
         .run(tauri::generate_context!())
         .expect("Pointra Mobile 启动失败");

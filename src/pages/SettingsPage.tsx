@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { api } from "../api";
-import type { Accent, Settings, SyncProgress } from "../types";
+import type { Accent, Settings, SyncProgress, UpdateInfo } from "../types";
 
 interface Props {
   settings: Settings;
@@ -17,6 +17,9 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
   const [progress, setProgress] = useState<SyncProgress | null>(null);
   /** 版本号取自构建时注入的 tauri.conf.json，取不到就退回静态值（权限缺失也不会白屏） */
   const [version, setVersion] = useState("0.2.0");
+  /** 自更新：检查走 Rust 命令；把包交给系统的最后一步用普通链接（见下） */
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
     getVersion()
@@ -74,6 +77,20 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
     } finally {
       setBusy(null);
       setProgress(null);
+    }
+  };
+
+  const check = async () => {
+    setChecking(true);
+    try {
+      const info = await api.checkUpdate();
+      setUpdate(info);
+      if (!info) onToast("电脑端还没放新版本包");
+      else if (!info.newer) onToast(`已是最新版本（电脑端 v${info.version}）`);
+    } catch (e) {
+      onToast(`${e}`);
+    } finally {
+      setChecking(false);
     }
   };
 
@@ -203,6 +220,42 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
             正在同步… {progress ? `${progress.phase} ${progress.cursor}/${progress.target}` : ""}
           </div>
         )}
+      </div>
+
+      <div className="card">
+        <div className="row between">
+          <strong>应用更新</strong>
+          <span className="muted">当前 v{version}</span>
+        </div>
+
+        {update && (
+          <div className="muted" style={{ marginTop: 8 }}>
+            {update.newer
+              ? `发现新版本 v${update.version}（${(update.size / 1048576).toFixed(1)} MB）`
+              : `电脑端版本 v${update.version}，已是最新`}
+          </div>
+        )}
+
+        <div className="row" style={{ marginTop: 10, flexWrap: "wrap" }}>
+          <button className="btn ghost small" disabled={checking} onClick={check}>
+            {checking ? <span className="spinner" /> : "检查更新"}
+          </button>
+        </div>
+
+        {update?.newer && settings.pairing && (
+          <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>
+            下载地址（手机浏览器打开，下完点安装包即可覆盖更新）：
+            <br />
+            <span className="link" style={{ userSelect: "text" }}>
+              {settings.pairing.base.replace(/\/$/, "")}/api/app/download
+            </span>
+          </div>
+        )}
+
+        <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+          更新包由电脑端「手机同步」那个服务提供，需与电脑在同一 WiFi；
+          把上面的地址粘到手机浏览器打开即可下载，装完词库与学习进度都保留。
+        </div>
       </div>
 
       <div className="card">

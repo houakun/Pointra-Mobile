@@ -10,6 +10,7 @@ import type {
   Settings,
   StateFilter,
   SyncReport,
+  UpdateInfo,
 } from "./types";
 
 /**
@@ -73,6 +74,11 @@ export const api = {
 
   startEvents: () => invoke<void>("start_events"),
   stopEvents: () => invoke<void>("stop_events"),
+
+  /** 问电脑端有无新版本；`null` = 电脑端还没发布 */
+  checkUpdate: () => invoke<UpdateInfo | null>("check_update"),
+  /** 下载 APK 到应用缓存目录，返回本地路径（再交给系统安装器） */
+  downloadUpdate: () => invoke<string>("download_update"),
 };
 
 /** 有道在线发音 URL（R3）。Android 端只用 HTML5 audio 播放，不移植 rodio。 */

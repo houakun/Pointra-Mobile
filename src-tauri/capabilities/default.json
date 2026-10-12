@@ -2,6 +2,5 @@
   "$schema": "../gen/schemas/mobile-schema.json",
   "identifier": "default",
   "description": "Pointra Mobile 主窗口能力",
-  "windows": ["main"],
   "permissions": ["core:default"]
 }

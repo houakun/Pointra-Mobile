@@ -56,6 +56,10 @@ echo "==> 1/3 构建前端"
 pnpm build
 
 echo "==> 2/3 交叉编译 Rust（$PROFILE；符号链接步骤会失败，属预期）"
+# tauri.conf.json / capabilities 是**编译期嵌入**的，但 cargo 未必把它们算作
+# 依赖变化（实测改完 tauri.conf.json 后不重编，App 里跑的还是旧配置，
+# 表现为启动 panic「unknown field ...」）。这里显式动一下 lib.rs 强制重编。
+touch src-tauri/src/lib.rs
 # 空数组在 set -u 下的安全展开写法
 npx tauri android build ${TAURI_MODE[@]+"${TAURI_MODE[@]}"} --target "$ABI" --apk || true
 

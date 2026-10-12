@@ -138,6 +138,17 @@ export default function App() {
     }, [detail, memo, refresh]),
   );
 
+  // 启动时静默问一次电脑端有没有新版本（失败就算了，不打扰用户）
+  useEffect(() => {
+    if (!ready || !settings.pairing?.base) return;
+    api
+      .checkUpdate()
+      .then((info) => {
+        if (info?.newer) showToast(`发现新版本 v${info.version}，去设置页更新`);
+      })
+      .catch(() => undefined);
+  }, [ready, settings.pairing?.base, showToast]);
+
   if (!ready) {
     return (
       <div className="app">
