@@ -12,6 +12,10 @@ src-tauri/gen/android/.gradle/
 src-tauri/gen/android/build/
 src-tauri/gen/android/app/build/
 src-tauri/gen/android/local.properties
+# Kotlin 编译器会话目录与构建期生成的空目录（不是源码，别被 git add -A 带走）
+src-tauri/gen/android/.kotlin/
+src-tauri/gen/android/buildSrc/.kotlin/
+src-tauri/gen/android/app/src/main/assets/
 # Release 签名配置（含密钥路径与密码）绝不进版本库
 src-tauri/gen/android/keystore.properties
 # jniLibs 里的 .so 由 scripts/build-apk.sh 拷贝，不进版本库
