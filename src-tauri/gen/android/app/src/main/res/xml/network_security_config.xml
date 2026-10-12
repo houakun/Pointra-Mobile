@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  局域网同步走明文 HTTP（PC 端服务监听 0.0.0.0:31415，无 TLS）。
+  Android 9+ 默认禁止明文流量，这里显式放行。
+  模拟器访问宿主机固定用 10.0.2.2，真机用 192.168.x.x，都无法用 domain-config 枚举，
+  因此 base-config 放行明文，并把系统证书作为信任锚。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

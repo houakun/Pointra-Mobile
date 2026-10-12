@@ -1,0 +1,20 @@
+# 依赖与构建产物
+node_modules/
+dist/
+src-tauri/target/
+
+# 本机构建用的 ASCII 目标目录（见 docs/02）
+.pointra-mobile-target/
+
+# Tauri / Android 生成物
+src-tauri/gen/schemas/
+src-tauri/gen/android/.gradle/
+src-tauri/gen/android/build/
+src-tauri/gen/android/app/build/
+src-tauri/gen/android/local.properties
+# jniLibs 里的 .so 由 scripts/build-apk.sh 拷贝，不进版本库
+src-tauri/gen/android/app/src/main/jniLibs/
+
+# 杂项
+*.log
+.DS_Store

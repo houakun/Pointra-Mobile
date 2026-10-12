@@ -1,0 +1,11 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- App 固定为浅色清新主题（不跟随系统深色）：
+         否则系统深色模式下会白底白字、状态栏图标也会看不见。 -->
+    <style name="Theme.pointra_mobile" parent="Theme.Material3.Light.NoActionBar">
+        <item name="android:windowBackground">#F7FBF9</item>
+        <item name="android:statusBarColor">#E6F6EF</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:navigationBarColor">#F7FBF9</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">true</item>
+    </style>
+</resources>

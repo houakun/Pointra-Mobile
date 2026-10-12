@@ -1,0 +1,29 @@
+[package]
+name = "pointra_mobile"
+version = "0.1.0"
+edition = "2021"
+description = "Pointra Mobile — Android 端数据层、简化 SM-2 与局域网同步客户端"
+
+[lib]
+name = "pointra_mobile"
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri v2 移动端壳
+tauri = { version = "2", features = [] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 局域网同步走明文 HTTP，不需要 TLS 后端；
+# 这样也避开了 aws-lc-rs / openssl 在 Android 上的交叉编译麻烦
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net"] }
+# WebSocket 客户端（明文 ws://，默认特性即可）
+tokio-tungstenite = "0.26"
+futures-util = "0.3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
