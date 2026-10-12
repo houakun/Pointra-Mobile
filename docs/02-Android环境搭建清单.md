@@ -256,3 +256,60 @@ echo scout >> D:/pointra-dev-server/dev-add.txt
 
 它让 P3–P6 的模拟器验证无需人工在 PC GUI 上操作；正式产品仍只用 App 自身的
 `vocab_add_current` / `SyncManager`。
+
+---
+
+## 12. 手机端自更新（A 方案 + B1 安装器）
+
+### 架构
+
+```
+手机「设置 → 应用更新」                    电脑端（同步服务，与手机同一 WiFi）
+  检查更新  ──── GET /api/app/latest ────▶ 读 <data_dir>/update/pointra.json
+  下载      ──── GET /api/app/download ──▶ 回 <data_dir>/update/pointra.apk
+  安装      ──── JNI → Kotlin → ACTION_VIEW → 系统安装器「是否更新此应用？」
+```
+
+- 两个接口**免鉴权**（与 `/api/ping`、`/api/pair` 一致）：token 被吊销时也能升级
+- 发布：`powershell -File scripts/publish-update.ps1`（默认发 aarch64 release 包到
+  `%APPDATA%\com.syjun.pointra\update\`）—— 它会从 `tauri.conf.json` 取版本、
+  按 `major*1000000+minor*1000+patch` 算 versionCode，并写入 `size` / `sha256`
+- 手机上必须先允许一次「安装未知应用」（系统会弹框引导；也可
+  `adb shell appops set com.syjun.pointra.mobile REQUEST_INSTALL_PACKAGES allow`）
+- 覆盖安装的前提：**同一签名 + versionCode 不降**（本项目固定用
+  `~/.pointra/pointra-release.jks`），满足时数据全保留
+
+### 为什么不用 tauri-plugin-opener（踩过的坑，别回退）
+
+`tauri-plugin-opener` 的 `openPath` / `openUrl` 在 Android 上**一律被 Tauri 的 ACL 拒**：
+
+```
+Command plugin:opener|open_url not allowed by ACL
+```
+
+官方文档的两种写法（`"opener:allow-open-url"` 字符串 + `allow-default-urls`；
+以及对象形式 `{ "identifier": "...", "allow": [{ "url": "http://*" }] }`）都试过，
+仍被拒。普通 `<a target="_blank">` 也不会被 Tauri 的 Android WebView 交给系统浏览器。
+
+**最终方案（B1）**：自己发 Intent，完全不经过 ACL：
+
+- `gen/android/app/src/main/java/com/syjun/pointra/mobile/ApkInstaller.kt`
+  —— `object` + `@JvmStatic fun install(Activity, String)`，用 `FileProvider` 把
+  缓存里的 APK 转成 `content://` 并 `startActivity(ACTION_VIEW)`
+- Rust 侧 `commands.rs::install_apk_via_system` 通过 JNI 调它（`jni` + `ndk-context`）
+
+### 三个必须记住的坑
+
+| # | 现象 | 原因 / 处理 |
+|---|---|---|
+| 1 | App 启动即 panic：`unknown field `open`` | `tauri.conf.json` 的 `plugins.opener` 只有 `requireLiteralLeadingDot` 一个字段；且 **`.json` 里不能写注释**（我加了注释导致严格 JSON 校验失败） |
+| 2 | 改了 `tauri.conf.json` / capabilities 但 App 行为没变 | 它们是**编译期嵌入**的，cargo 未必视为依赖变化 → `scripts/build-apk.sh` 里已加 `touch src-tauri/src/lib.rs` 强制重编 |
+| 3 | release 包 `NoSuchMethodError: ApkInstaller.install(...)` | release 开了 R8 优化，**只被 JNI 引用的方法会被删掉** → `app/proguard-rules.pro` 里必须 `-keep class com.syjun.pointra.mobile.ApkInstaller { *; }` |
+| 4 | JNI 里 `FindClass` 报 ClassNotFoundException | native 线程用的是**系统** ClassLoader，找不到 App 私有类 → 必须拿 Activity 的 `getClassLoader()` 再 `loadClass` |
+
+### 发布元数据的编码坑
+
+`publish-update.ps1` 必须写**不带 BOM** 的 UTF-8（用 `[System.IO.File]::WriteAllText` +
+`UTF8Encoding($false)`）：PowerShell 5.1 的 `-Encoding UTF8` 会加 BOM，
+而 PC 端用 `serde_json` 解析会直接报 `expected value at line 1 column 1`
+（服务端也做了容错剥离 BOM，双保险）。

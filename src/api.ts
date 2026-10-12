@@ -79,6 +79,8 @@ export const api = {
   checkUpdate: () => invoke<UpdateInfo | null>("check_update"),
   /** 下载 APK 到应用缓存目录，返回本地路径（再交给系统安装器） */
   downloadUpdate: () => invoke<string>("download_update"),
+  /** 拉起系统安装器安装已下载的 APK（JNI 调 Kotlin 助手，不走 ACL） */
+  installUpdate: (path: string) => invoke<void>("install_update", { path }),
 };
 
 /** 有道在线发音 URL（R3）。Android 端只用 HTML5 audio 播放，不移植 rodio。 */

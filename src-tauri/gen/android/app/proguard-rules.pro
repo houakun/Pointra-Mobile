@@ -19,3 +19,7 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+# JNI 调用的类/方法不能被 R8 删掉或改名：
+# Rust 侧通过 ClassLoader.loadClass + CallStaticVoidMethod 调它，
+# R8 看不到这条引用，release 构建会把 install 方法优化掉（实测 NoSuchMethodError）。
+-keep class com.syjun.pointra.mobile.ApkInstaller { *; }

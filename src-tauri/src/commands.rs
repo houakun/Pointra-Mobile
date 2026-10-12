@@ -794,6 +794,78 @@ pub async fn download_update(
 }
 
 // ---------------------------------------------------------------------------
+// 拉起系统安装器（B1：JNI 调自己写的 Kotlin 助手，不走 ACL）
+// ---------------------------------------------------------------------------
+
+/// 把已下载的 APK 交给 Android 系统安装器。
+///
+/// 关键坑：native 线程上 `env.find_class` 用的是**系统** ClassLoader，找不到 App 自己的类
+/// （会报 ClassNotFoundException），必须拿 Activity 的 ClassLoader 去 `loadClass`。
+#[cfg(target_os = "android")]
+fn install_apk_via_system(path: &str) -> Result<(), String> {
+    use jni::objects::{JClass, JObject, JValue};
+    use jni::JavaVM;
+
+    let ctx = ndk_context::android_context();
+    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }
+        .map_err(|e| format!("JNI 初始化失败: {e}"))?;
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| format!("attach 当前线程失败: {e}"))?;
+    let activity = unsafe { JObject::from_raw(ctx.context().cast()) };
+
+    // 1) 从 Activity 拿 ClassLoader
+    let loader = env
+        .call_method(&activity, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+        .and_then(|v| v.l())
+        .map_err(|e| format!("取 ClassLoader 失败: {e}"))?;
+
+    // 2) 用它的 loadClass 拿我们的类
+    let class_name = env
+        .new_string("com.syjun.pointra.mobile.ApkInstaller")
+        .map_err(|e| format!("构造类名失败: {e}"))?;
+    let class_name_obj = JObject::from(class_name);
+    let class_obj = env
+        .call_method(
+            &loader,
+            "loadClass",
+            "(Ljava/lang/String;)Ljava/lang/Class;",
+            &[JValue::Object(&class_name_obj)],
+        )
+        .and_then(|v| v.l())
+        .map_err(|e| format!("加载 ApkInstaller 失败: {e}"))?;
+    let class = JClass::from(class_obj);
+
+    // 3) 调 ApkInstaller.install(Activity, String)
+    let path_j = env
+        .new_string(path)
+        .map_err(|e| format!("构造路径失败: {e}"))?;
+    let path_obj = JObject::from(path_j);
+    env.call_static_method(
+        class,
+        "install",
+        "(Landroid/app/Activity;Ljava/lang/String;)V",
+        &[JValue::Object(&activity), JValue::Object(&path_obj)],
+    )
+    .map_err(|e| format!("调用 ApkInstaller.install 失败: {e}"))?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "android"))]
+fn install_apk_via_system(_path: &str) -> Result<(), String> {
+    Err("安装 APK 只在 Android 上支持".into())
+}
+
+/// 拉起系统安装器安装已下载的 APK（前端在 `download_update` 之后调用）。
+#[tauri::command]
+pub async fn install_update(path: String) -> Result<(), String> {
+    // JNI 调用是同步阻塞的，放到后台线程池，别阻塞 UI 线程
+    tokio::task::spawn_blocking(move || install_apk_via_system(&path))
+        .await
+        .map_err(|e| format!("后台任务失败：{e}"))?
+}
+
+// ---------------------------------------------------------------------------
 // 入口
 // ---------------------------------------------------------------------------
 
@@ -839,6 +911,7 @@ pub fn run() {
             reset_all,
             check_update,
             download_update,
+            install_update,
         ])
         .run(tauri::generate_context!())
         .expect("Pointra Mobile 启动失败");

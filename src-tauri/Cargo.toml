@@ -1,6 +1,6 @@
 [package]
 name = "pointra_mobile"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Pointra Mobile — Android 端数据层、简化 SM-2 与局域网同步客户端"
 
@@ -27,6 +27,14 @@ futures-util = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+
+# 自更新最后一步：把下载好的 APK 交给系统安装器。
+# 走 JNI 直接调自己写的 Kotlin 助手（ApkInstaller），
+# 而不是 tauri-plugin-opener —— 后者的 openPath/openUrl 在 Android 上会被 ACL 拦
+# （plugin:opener|open_url not allowed by ACL），JNI 这条路根本不经过 ACL。
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk-context = "0.1"
 
 [profile.release]
 # 手机安装包体积敏感：debug 包 163MB，加上这些后 release 通常只剩十几 MB。

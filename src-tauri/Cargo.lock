@@ -2309,9 +2309,11 @@ dependencies = [
 
 [[package]]
 name = "pointra_mobile"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "futures-util",
+ "jni",
+ "ndk-context",
  "reqwest",
  "rusqlite",
  "serde",

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
+import { listen } from "@tauri-apps/api/event";
 import { api } from "../api";
-import type { Accent, Settings, SyncProgress, UpdateInfo } from "../types";
+import type { Accent, Settings, SyncProgress, UpdateInfo, UpdateProgress } from "../types";
 
 interface Props {
   settings: Settings;
@@ -17,14 +18,27 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
   const [progress, setProgress] = useState<SyncProgress | null>(null);
   /** 版本号取自构建时注入的 tauri.conf.json，取不到就退回静态值（权限缺失也不会白屏） */
   const [version, setVersion] = useState("0.2.0");
-  /** 自更新：检查走 Rust 命令；把包交给系统的最后一步用普通链接（见下） */
+  /** 自更新：检查/下载走 Rust 命令，最后一步用 JNI 拉系统安装器 */
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [checking, setChecking] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [dl, setDl] = useState<UpdateProgress | null>(null);
+  /** 拉安装器失败时才把下载地址展示出来当退路 */
+  const [installError, setInstallError] = useState<string | null>(null);
 
   useEffect(() => {
     getVersion()
       .then(setVersion)
       .catch(() => undefined);
+  }, []);
+
+  // 下载进度（Rust 端边写边发）
+  useEffect(() => {
+    let un: (() => void) | undefined;
+    listen<UpdateProgress>("update://progress", (ev) => setDl(ev.payload)).then((f) => {
+      un = f;
+    });
+    return () => un?.();
   }, []);
 
   const pairing = settings.pairing;
@@ -91,6 +105,33 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
       onToast(`${e}`);
     } finally {
       setChecking(false);
+    }
+  };
+
+  const doUpdate = async () => {
+    setDownloading(true);
+    setDl(null);
+    setInstallError(null);
+
+    // 第一步：下载（失败就是真没下下来）
+    let path: string;
+    try {
+      path = await api.downloadUpdate();
+    } catch (e) {
+      onToast(`下载失败：${e}`);
+      setDownloading(false);
+      return;
+    }
+
+    // 第二步：JNI 调系统安装器（失败与下载无关，文案不混）
+    try {
+      await api.installUpdate(path);
+      onToast("已交给系统安装器，请在弹窗里点「更新」");
+    } catch (e) {
+      setInstallError(String(e));
+      onToast(`拉起安装器失败：${e}`);
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -236,15 +277,27 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
           </div>
         )}
 
+        {downloading && dl && (
+          <div className="muted" style={{ marginTop: 8 }}>
+            正在下载 {(dl.downloaded / 1048576).toFixed(1)}
+            {dl.total ? ` / ${(dl.total / 1048576).toFixed(1)}` : ""} MB
+          </div>
+        )}
+
         <div className="row" style={{ marginTop: 10, flexWrap: "wrap" }}>
-          <button className="btn ghost small" disabled={checking} onClick={check}>
+          <button className="btn ghost small" disabled={checking || downloading} onClick={check}>
             {checking ? <span className="spinner" /> : "检查更新"}
           </button>
+          {update?.newer && (
+            <button className="btn small" disabled={downloading} onClick={doUpdate}>
+              {downloading ? <span className="spinner" /> : "下载并安装"}
+            </button>
+          )}
         </div>
 
-        {update?.newer && settings.pairing && (
+        {installError && settings.pairing && (
           <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>
-            下载地址（手机浏览器打开，下完点安装包即可覆盖更新）：
+            退路：把下面地址粘到手机浏览器打开下载，下完点安装包即可覆盖更新：
             <br />
             <span className="link" style={{ userSelect: "text" }}>
               {settings.pairing.base.replace(/\/$/, "")}/api/app/download
@@ -253,8 +306,8 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
         )}
 
         <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
-          更新包由电脑端「手机同步」那个服务提供，需与电脑在同一 WiFi；
-          把上面的地址粘到手机浏览器打开即可下载，装完词库与学习进度都保留。
+          更新包由电脑端「手机同步」那个服务提供，需与电脑在同一 WiFi。
+          安装时系统会问一次是否允许本应用安装应用，装完词库与学习进度都保留。
         </div>
       </div>
 
