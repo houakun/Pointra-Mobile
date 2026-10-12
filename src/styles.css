@@ -271,7 +271,8 @@ select:focus {
   background-image: linear-gradient(180deg, var(--bg-top) 0%, rgba(251, 254, 252, 0) 46%);
   display: flex;
   flex-direction: column;
-  padding: calc(10px + var(--safe-top)) 16px calc(16px + var(--safe-bottom));
+  /* 底部留出更多空间：把三档按钮从「贴底」抬高到拇指好按的位置 */
+  padding: calc(10px + var(--safe-top)) 16px calc(104px + var(--safe-bottom));
   z-index: 50;
 }
 
@@ -306,7 +307,52 @@ select:focus {
   justify-content: center;
   text-align: center;
   gap: 12px;
-  padding: 20px 0;
+  /* 底部多留一段：内容居中后会整体上移，单词不再偏下 */
+  padding: 20px 0 120px;
+  transition: transform 0.18s ease;
+  /* 左右滑动切换的跟手/切卡动画 */
+  touch-action: pan-y;
+}
+
+/* 拖动中不要过渡，否则跟手会发滞 */
+.study-card.dragging {
+  transition: none;
+}
+
+@keyframes studySlideLeft {
+  from {
+    opacity: 0.2;
+    transform: translateX(38%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes studySlideRight {
+  from {
+    opacity: 0.2;
+    transform: translateX(-38%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.study-card.anim-left {
+  animation: studySlideLeft 0.26s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.study-card.anim-right {
+  animation: studySlideRight 0.26s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.study-hint {
+  text-align: center;
+  font-size: 11px;
+  padding-top: 10px;
 }
 
 .study-front {
@@ -515,6 +561,95 @@ select:focus {
   color: var(--muted);
   padding: 40px 0;
   font-size: 14px;
+}
+
+/* 可点击的列表项（词库/句子本 → 详情页） */
+.tappable {
+  cursor: pointer;
+}
+
+.tappable:active {
+  opacity: 0.55;
+}
+
+/* 单词/句子详情页（词库点进来） */
+.detail {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  background-image: linear-gradient(180deg, var(--bg-top) 0%, rgba(251, 254, 252, 0) 46%);
+  padding: calc(10px + var(--safe-top)) 16px calc(10px + var(--safe-bottom));
+}
+
+.detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.detail-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-top: 14px;
+}
+
+.detail-word {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--accent-2);
+  word-break: break-word;
+  line-height: 1.2;
+}
+
+.detail-sub {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0 16px;
+  min-height: 34px;
+}
+
+.detail-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+  margin-bottom: 12px;
+  box-shadow: var(--shadow);
+}
+
+.detail-card-title {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.detail-gloss {
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--text);
+}
+
+.detail-gloss + .detail-gloss {
+  margin-top: 5px;
+}
+
+.detail-exchange {
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--text);
+}
+
+.detail-meta {
+  font-size: 12px;
+  padding: 4px 2px 24px;
 }
 
 .spinner {

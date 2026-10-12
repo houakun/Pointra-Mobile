@@ -406,6 +406,8 @@ pub struct CardDetail {
     pub audio_uk: Option<String>,
     pub dit: Option<String>,
     pub usual_dict: Value,
+    /// 词形变化（复数/过去式/分词…）。有道 `exchange` 字段原样下发。
+    pub exchange: Value,
     pub state: i32,
     pub due_at: Option<i64>,
     pub added_at: Option<i64>,
@@ -413,11 +415,12 @@ pub struct CardDetail {
 
 fn word_card(conn: &Connection, id: &str) -> Result<Option<CardDetail>, String> {
     conn.query_row(
-        "SELECT id, word, dit, usual_dict, phonetic_us, phonetic_uk, audio_us, audio_uk, \
-         state, due_at, added_at FROM words WHERE id = ?1",
+        "SELECT id, word, dit, usual_dict, exchange, phonetic_us, phonetic_uk, audio_us, \
+         audio_uk, state, due_at, added_at FROM words WHERE id = ?1",
         params![id],
         |row| {
             let usual: Option<String> = row.get(3)?;
+            let exchange: Option<String> = row.get(4)?;
             Ok(CardDetail {
                 kind: "word".into(),
                 id: row.get(0)?,
@@ -427,13 +430,16 @@ fn word_card(conn: &Connection, id: &str) -> Result<Option<CardDetail>, String> 
                 usual_dict: usual
                     .and_then(|s| serde_json::from_str(&s).ok())
                     .unwrap_or_else(|| json!([])),
-                phonetic_us: row.get(4)?,
-                phonetic_uk: row.get(5)?,
-                audio_us: row.get(6)?,
-                audio_uk: row.get(7)?,
-                state: row.get(8)?,
-                due_at: row.get(9)?,
-                added_at: row.get(10)?,
+                exchange: exchange
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_else(|| json!({})),
+                phonetic_us: row.get(5)?,
+                phonetic_uk: row.get(6)?,
+                audio_us: row.get(7)?,
+                audio_uk: row.get(8)?,
+                state: row.get(9)?,
+                due_at: row.get(10)?,
+                added_at: row.get(11)?,
             })
         },
     )
@@ -457,6 +463,7 @@ fn sentence_card(conn: &Connection, id: &str) -> Result<Option<CardDetail>, Stri
                 audio_uk: None,
                 dit: None,
                 usual_dict: json!([]),
+                exchange: json!({}),
                 state: row.get(3)?,
                 due_at: row.get(4)?,
                 added_at: row.get(5)?,
@@ -605,6 +612,58 @@ pub async fn reset_all(state: State<'_, AppState>) -> Result<(), String> {
         Ok(())
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// 详情页靠 `usual_dict` 渲染释义、靠 `exchange` 渲染「词形变化」，
+    /// 这两个字段必须真的下发（之前 `get_card` 漏了 exchange，前端读了空）。
+    #[test]
+    fn word_card_exposes_usual_dict_and_exchange() {
+        let conn = db::open_in_memory().unwrap();
+        db::apply_word_record(
+            &conn,
+            &json!({
+                "seq": 1, "id": "w1", "word": "apple", "normalized": "apple",
+                "dit": "n. 苹果",
+                "usual_dict": [{"pos": "n.", "values": ["苹果", "苹果公司"]}],
+                "exchange": {"word_pl": ["apples"]},
+                "added_at": 1_760_000_000_000i64
+            }),
+        )
+        .unwrap();
+
+        let card = word_card(&conn, "w1").unwrap().unwrap();
+        assert_eq!(card.front, "apple");
+        assert_eq!(card.dit.as_deref(), Some("n. 苹果"));
+        assert_eq!(card.usual_dict[0]["pos"], "n.");
+        assert_eq!(card.exchange["word_pl"][0], "apples");
+    }
+
+    #[test]
+    fn sentence_card_has_empty_exchange() {
+        let conn = db::open_in_memory().unwrap();
+        db::apply_sentence_record(
+            &conn,
+            &json!({
+                "seq": 2, "id": "s1", "text": "one two three",
+                "trans": "一二三", "added_at": 0
+            }),
+        )
+        .unwrap();
+
+        let card = sentence_card(&conn, "s1").unwrap().unwrap();
+        assert_eq!(card.front, "one two three");
+        assert_eq!(card.trans.as_deref(), Some("一二三"));
+        assert!(card
+            .exchange
+            .as_object()
+            .map(|o| o.is_empty())
+            .unwrap_or(false));
+    }
 }
 
 // ---------------------------------------------------------------------------

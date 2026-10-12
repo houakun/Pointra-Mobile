@@ -67,6 +67,8 @@ export interface CardDetail {
   audio_uk: string | null;
   dit: string | null;
   usual_dict: unknown;
+  /** 词形变化（复数/过去式/分词…）；句子为空对象 */
+  exchange: unknown;
   state: number;
   due_at: number | null;
   added_at: number | null;

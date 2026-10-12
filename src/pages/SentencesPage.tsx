@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { BrowseItem } from "../types";
+import type { BrowseItem, CardKind } from "../types";
 
 const PAGE_SIZE = 40;
 
 interface Props {
   onToast: (msg: string) => void;
+  /** 点某条 → 打开句子详情页 */
+  onOpen: (id: string, kind: CardKind) => void;
 }
 
-export default function SentencesPage({ onToast }: Props) {
+export default function SentencesPage({ onToast, onOpen }: Props) {
   const [keyword, setKeyword] = useState("");
   const [items, setItems] = useState<BrowseItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -70,7 +72,10 @@ export default function SentencesPage({ onToast }: Props) {
         {items.length === 0 && !loading && <div className="empty">句子本还是空的</div>}
         {items.map((it) => (
           <div className="list-item" key={it.id}>
-            <div className="main">
+            <div
+              className="main tappable"
+              onClick={() => onOpen(it.id, "sentence")}
+            >
               <div className="title" style={{ whiteSpace: "normal" }}>
                 {it.text}
               </div>

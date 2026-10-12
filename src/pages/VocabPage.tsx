@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { BrowseItem, StateFilter } from "../types";
+import type { BrowseItem, CardKind, StateFilter } from "../types";
 
 const LETTERS = "abcdefghijklmnopqrstuvwxyz".split("");
 
@@ -35,9 +35,11 @@ function fmtDate(ms: number): string {
 
 interface Props {
   onToast: (msg: string) => void;
+  /** 点某条 → 打开单词/句子详情页 */
+  onOpen: (id: string, kind: CardKind) => void;
 }
 
-export default function VocabPage({ onToast }: Props) {
+export default function VocabPage({ onToast, onOpen }: Props) {
   const [keyword, setKeyword] = useState("");
   const [state, setState] = useState<StateFilter>("all");
   const [letter, setLetter] = useState<string | null>(null);
@@ -198,9 +200,10 @@ export default function VocabPage({ onToast }: Props) {
         <div className="vlist-inner" style={{ height: items.length * ROW_H }}>
           {items.slice(start, end).map((it, i) => (
             <div
-              className="list-item vrow"
+              className="list-item vrow tappable"
               key={it.id}
               style={{ top: (start + i) * ROW_H }}
+              onClick={() => onOpen(it.id, "word")}
             >
               <div className="main">
                 <div className="title">{it.text}</div>

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
-import type { Overview, Progress, Settings } from "./types";
+import type { CardKind, Overview, Progress, Settings } from "./types";
+import { useBackGuard } from "./hooks/useBackGuard";
 import TodayPage from "./pages/TodayPage";
 import StudyPage from "./pages/StudyPage";
 import MemoPage from "./pages/MemoPage";
+import WordDetailPage from "./pages/WordDetailPage";
 import VocabPage from "./pages/VocabPage";
 import SentencesPage from "./pages/SentencesPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -38,6 +40,8 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("today");
   const [studying, setStudying] = useState(false);
   const [memo, setMemo] = useState(false);
+  /** 词库/句子本点进来的详情页 */
+  const [detail, setDetail] = useState<{ id: string; kind: CardKind } | null>(null);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [overview, setOverview] = useState<Overview>(EMPTY_OVERVIEW);
   const [progress, setProgress] = useState<Progress>(EMPTY_PROGRESS);
@@ -120,6 +124,20 @@ export default function App() {
     if (tab === "today") refresh();
   }, [tab, refresh]);
 
+  // 覆盖页打开时，Android 返回键 / 全面屏边缘手势先关掉它，而不是退出整个 App。
+  // 根页面（今日/词库/…）没有历史可回，则保持系统惯例（退出 App）。
+  const overlayOpen = studying || memo || detail !== null;
+  useBackGuard(
+    overlayOpen,
+    useCallback(() => {
+      // 同一时刻只会有一个覆盖页，按最上层往关
+      if (detail) return setDetail(null);
+      if (memo) return setMemo(false);
+      setStudying(false);
+      refresh();
+    }, [detail, memo, refresh]),
+  );
+
   if (!ready) {
     return (
       <div className="app">
@@ -150,8 +168,18 @@ export default function App() {
             syncHint={settings.pairing ? `同步：${settings.pairing.base}` : "未配对，去设置页配对"}
           />
         )}
-        {tab === "vocab" && <VocabPage onToast={showToast} />}
-        {tab === "sentences" && <SentencesPage onToast={showToast} />}
+        {tab === "vocab" && (
+          <VocabPage
+            onToast={showToast}
+            onOpen={(id, kind) => setDetail({ id, kind })}
+          />
+        )}
+        {tab === "sentences" && (
+          <SentencesPage
+            onToast={showToast}
+            onOpen={(id, kind) => setDetail({ id, kind })}
+          />
+        )}
         {tab === "settings" && (
           <SettingsPage settings={settings} onChange={setSettings} onToast={showToast} />
         )}
@@ -169,6 +197,16 @@ export default function App() {
       )}
 
       {memo && <MemoPage onExit={() => setMemo(false)} onToast={showToast} />}
+
+      {detail && (
+        <WordDetailPage
+          id={detail.id}
+          kind={detail.kind}
+          accent={settings.audio_accent}
+          onClose={() => setDetail(null)}
+          onToast={showToast}
+        />
+      )}
 
       <nav className="tabbar">
         <TabButton icon="📅" label="今日" active={tab === "today"} onClick={() => setTab("today")} />

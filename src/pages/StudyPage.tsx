@@ -10,6 +10,10 @@ interface Props {
 
 /** 与 sm2::Grade 一一对应 */
 const STUDY_GRADE = { AGAIN: 0, GOOD: 1, TOO_EASY: 2 } as const;
+/** 左右滑超过这个距离就切上/下一张 */
+const SWIPE_PX = 60;
+/** 判定主轴的最小位移：小于它就当成「点按」 */
+const AXIS_PX = 10;
 
 export default function StudyPage({ settings, onExit, onToast }: Props) {
   const [queue, setQueue] = useState<QueueEntry[]>([]);
@@ -17,13 +21,26 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
   const [card, setCard] = useState<CardDetail | null>(null);
   const [revealed, setRevealed] = useState(false);
   const [loading, setLoading] = useState(true);
+  /** 拖动中的水平位移（跟手反馈） */
+  const [dragX, setDragX] = useState(0);
+  /** 切卡动画方向 */
+  const [anim, setAnim] = useState<"left" | "right" | null>(null);
   const sessionStart = useRef(Date.now());
   /**
    * 本张卡是否已经记过「不认识」。
-   * 记过之后这三个按钮里的「我认识 / 太简单」只负责前进，不再重复评分，
+   * 记过之后「我认识 / 太简单」只负责前进，不再重复评分，
    * 否则会把 Again 覆盖成 Good，**丢维当日回队尾重现**的语义。
    */
   const gradedAgain = useRef(false);
+  const gesture = useRef<{
+    x: number;
+    y: number;
+    dx: number;
+    dy: number;
+    axis: "none" | "x" | "y";
+  } | null>(null);
+  /** 滑动结束后浏览器还会补发一次 click，别让它误触按钮评分 */
+  const swallowClick = useRef(false);
 
   const total = queue.length;
   const current = queue[index] ?? null;
@@ -88,10 +105,14 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!anim) return;
+    const t = window.setTimeout(() => setAnim(null), 280);
+    return () => window.clearTimeout(t);
+  }, [anim]);
+
   const audio = useMemo(() => {
     if (!card) return null;
-    // 单词：优先用 PC 下发的音频 URL，缺失时按美/英偏好拼有道 URL。
-    // 句子：按 Q15 用有道整句 TTS（dictvoice?audio=<整句>）。
     if (card.kind === "sentence") {
       return youdaoAudio(card.front, settings.audio_accent);
     }
@@ -102,13 +123,22 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
 
   const play = () => {
     if (!audio) return;
-    const el = new Audio(audio);
-    el.play().catch(() =>
-      onToast("发音加载失败：该词句可能不在有道发音库内，或网络不可用"),
-    );
+    new Audio(audio)
+      .play()
+      .catch(() =>
+        onToast("发音加载失败：该词句可能不在有道发音库内，或网络不可用"),
+      );
   };
 
-  /** 前进到下一张；`requeue` 表示这张卡记过「不认识」，要挪到队尾（当日重现）。 */
+  /** 左右滑动：只切上/下一张，**不评分**（评分交给三个按钮）。 */
+  const goTo = (delta: 1 | -1) => {
+    const target = index + delta;
+    if (target < 0 || target >= total) return;
+    setRevealed(false);
+    setAnim(delta === 1 ? "left" : "right");
+    setIndex(target);
+  };
+
   const advance = (requeue: boolean) => {
     setRevealed(false);
     if (requeue) {
@@ -121,7 +151,6 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
       return;
     }
     if (index + 1 >= total) {
-      // 队列走完：落一次学习时长再退出
       api.addStudyMs(Date.now() - sessionStart.current).catch(() => undefined);
       sessionStart.current = Date.now();
       onExit();
@@ -162,6 +191,42 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
     advance(gradedAgain.current);
   };
 
+  // 不给容器 setPointerCapture：否则 click 会被重定向到容器，按钮点不动。
+  // 容器是全屏的，不捕获也能拿到冒泡上来的 pointerup。
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    gesture.current = { x: e.clientX, y: e.clientY, dx: 0, dy: 0, axis: "none" };
+  };
+
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const g = gesture.current;
+    if (!g) return;
+    g.dx = e.clientX - g.x;
+    g.dy = e.clientY - g.y;
+    if (g.axis === "none" && (Math.abs(g.dx) > AXIS_PX || Math.abs(g.dy) > AXIS_PX)) {
+      g.axis = Math.abs(g.dx) > Math.abs(g.dy) ? "x" : "y";
+    }
+    if (g.axis === "x") setDragX(g.dx);
+  };
+
+  const onPointerUp = () => {
+    const g = gesture.current;
+    gesture.current = null;
+    setDragX(0);
+    if (!g) return;
+    if (g.axis === "x" && Math.abs(g.dx) >= SWIPE_PX) {
+      swallowClick.current = true;
+      window.setTimeout(() => {
+        swallowClick.current = false;
+      }, 350);
+      goTo(g.dx < 0 ? 1 : -1);
+    }
+  };
+
+  const onPointerCancel = () => {
+    gesture.current = null;
+    setDragX(0);
+  };
+
   if (loading) {
     return (
       <div className="study">
@@ -176,9 +241,9 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
     return (
       <div className="study">
         <div className="study-head">
-          <button className="btn ghost small" onClick={onExit}>
-            返回
-          </button>
+          <div className="bar">
+            <i style={{ width: "100%" }} />
+          </div>
         </div>
         <div className="study-card">
           <div className="study-front">队列已空</div>
@@ -194,11 +259,21 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
   const pct = total === 0 ? 0 : Math.round((index / total) * 100);
 
   return (
-    <div className="study">
+    <div
+      className="study"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
+      onClickCapture={(e) => {
+        // 滑动之后浏览器补发的那次 click 直接吞掉，避免误评分
+        if (swallowClick.current) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
+    >
       <div className="study-head">
-        <button className="btn ghost small" onClick={onExit}>
-          返回
-        </button>
         <div className="bar">
           <i style={{ width: `${pct}%` }} />
         </div>
@@ -207,8 +282,13 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
         </span>
       </div>
 
-      {/* 空白处不解锁：只有「不认识」才会翻开释义 */}
-      <div className="study-card">
+      {/* 左右滑动切换上/下一张：拖动跟手，松手过阈值即切 */}
+      <div
+        className={`study-card${dragX !== 0 ? " dragging" : ""}${
+          anim ? ` anim-${anim}` : ""
+        }`}
+        style={dragX !== 0 ? { transform: `translateX(${dragX}px)` } : undefined}
+      >
         <div className={`study-front ${current.kind === "sentence" ? "sentence" : ""}`}>
           {card?.front ?? current.front}
         </div>
@@ -268,13 +348,15 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
           </div>
           <button
             className="btn ghost"
-            style={{ marginTop: 10 }}
+            style={{ marginTop: 8 }}
             onClick={() => grade(STUDY_GRADE.TOO_EASY)}
           >
             标记为太简单
           </button>
         </>
       )}
+
+      <div className="study-hint muted">← 左右滑动切换单词 · 从屏幕边缘滑动返回 →</div>
     </div>
   );
 }
