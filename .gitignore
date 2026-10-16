@@ -24,3 +24,6 @@ src-tauri/gen/android/app/src/main/jniLibs/
 # 杂项
 *.log
 .DS_Store
+
+# 抓取脚本的词表缓存（运行时生成，不入库）
+scripts/.cache/

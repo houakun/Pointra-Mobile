@@ -1,0 +1,32 @@
+---
+id: cet4-2024-06-2-long-term-goals
+title: How to Better Work Towards Long-term Goals
+source: 2024 年 6 月英语四级真题 · 第 2 套 Part Ⅲ Section B（选自 Todoist 官方博客，Becky Kane）
+keywords: psychologist, retirement, irrational, traits, equivalent, hypothetical, procrastination, gratification, persistence, trumps
+---
+
+Hal Hershfield, a psychologist at the UCLA Anderson School of Management, wanted to know why people weren't saving for retirement. Across the board, people are living longer. Logically, they'll need more money to live comfortably in their post-work years. And yet, savings rates in the U.S. have gone down in recent decades, not up.
+
+To help explain this seemingly irrational behavior, Hershfield and his team scanned the brains of study participants while asking them to what degree various traits—like "honorable" or "funny"—applied to their current self, their future self, a current other, or a future other. As participants answered, Hershfield's team recorded which parts of their brains lit up. Unsurprisingly, people's brains were most active when thinking about their current selves and least active when thinking about a current other. But the team found that participants' brain activity while considering their future selves more closely resembled their brain activity while thinking about a current other rather than the current self.
+
+Put in practical terms, when thinking of yourself in a month or a year or a decade, your brain registers that person in ways similar to how it would register Taylor Swift or the mailman. Understood in that way, saving for retirement is the equivalent of giving money away to someone else entirely.
+
+In light of Hershfield's study, one simple question arises: Is it possible to make our present selves give a damn about our future selves? The answers are anything but simple.
+
+Seen through the lens of the present self versus the future self, our self-defeating actions—like choosing to watch television rather than go to the gym—suddenly make perfect sense. We get to enjoy the very concrete, immediate benefits of our actions while someone else (namely, our future selves) suffers the hypothetical, far-off consequences. As a result, the decisions we make for our present selves often look very different from our decisions for our future selves. We believe that tomorrow will be different. We believe that we will be different tomorrow; but in doing so, we prioritize our current mood over the consequences of our inaction for the future self.
+
+Understanding our procrastination through the lens of the present and future selves, we're left with three possible solutions: The first is to force your future self to do whatever your present self doesn't want to do. The second is to convince your present self that your future self is, in fact, still you. If the central problem is that we think of our future selves as other people, it follows that trying to identify more closely with our future selves will encourage us to make better long-term decisions.
+
+In a follow-up study, Hershfield wanted to explore ways to bridge the disconnect between the present and future selves and encourage people to save more for retirement. He and his team took photos of study participants, and then used image processing to visually age their faces. Participants were then placed in a virtual reality setting where they could look into a mirror and see their aged selves looking back at them. Participants who saw their aged selves said they would save 30% more of their salary for retirement than the control group.
+
+Whatever your long-term goals may be—getting in better shape, launching your own business, writing a book—thinking about your deadline in terms of days rather than months or years can help you wrap your mind around how close the future really is.
+
+The third solution is to forget about your future self and use your present self's love of instant gratification to your advantage. While the two tactics above can be effective in making better long-term choices, in the end, you're still struggling against human nature. Our brains are hard-wired for instant gratification. Instead of fighting your present self's need for immediate rewards, why not use it to your advantage? When most of us set goals, we focus on long-term results we want to see—e.g., losing weight, getting a promotion, retiring in comfort, etc. While those visions of our future selves can be inspiring, when it comes to actually doing the day-to-day work, it may be more effective to reframe activities in terms of their immediate, or at least very near-term, rewards.
+
+Take writing this article, for instance. It's easy for me to imagine how amazing it will feel at the end of the workday to have this article done. This isn't just my opinion. Research partners Kaitlin Woolley of Cornell University and Ayelet Fishbach of the University of Chicago have made a career out of studying the differences between the goals that people achieve and the ones that fall to the wayside.
+
+"In one study, we asked people online about the goals they set at the beginning of the year. Most people set goals to achieve delayed, long-term benefits, such as career advancement, debt repayment, or improved health. We asked these individuals how enjoyable it was to pursue their goal, as well as how important their goal was. We also asked whether they were still working on their goals two months after setting them. We found that enjoyment predicted people's goal persistence two months after setting the goal far more than how important they rated their goal to be," Woolley said.
+
+This pattern held true across a wide variety of goals from exercising to studying to eating healthier foods. For example, people ate 50% more of a healthy food when directed to focus on the good taste rather than the long-term health benefits. Other studies have shown a greater uptake of exercise in people who were told to think of the enjoyment of doing the exercise now rather than future health gains.
+
+These findings suggest that when it comes to achieving your goals, enjoying the process itself is more important than wanting the long-term benefits. In other words, present self trumps future self. Who says instant gratification has to be a bad thing? By all means, set ambitious long-term goals for your future self, but when it comes to actually following through day-to-day, make sure your present self knows what's in it for her too.

@@ -2,6 +2,7 @@
 
 use crate::browse::{self, BrowsePage, StateFilter};
 use crate::db;
+use crate::dict;
 use crate::session::{self, DailyGoals, Progress, QueueEntry};
 use crate::settings::{self, Settings};
 use crate::sm2::{self, Grade};
@@ -11,6 +12,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -192,10 +194,7 @@ struct SyncProgress {
 /// （不能拉完 words 就推高游标，否则会漏掉夹在中间 seq 的 sentences）。
 /// 最后取两者终值的 max 作为新游标。
 #[tauri::command]
-pub async fn sync_now(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<SyncReport, String> {
+pub async fn sync_now(app: AppHandle, state: State<'_, AppState>) -> Result<SyncReport, String> {
     let (base, token) = current_pairing(&state)?;
     let db = state.db.clone();
     let settings_arc = state.settings.clone();
@@ -261,7 +260,8 @@ pub async fn sync_now(
         Ok((cursor, applied))
     }
 
-    let (word_cursor, words_applied) = drain(&app, &db, &client, "words", base_cursor, target).await?;
+    let (word_cursor, words_applied) =
+        drain(&app, &db, &client, "words", base_cursor, target).await?;
     let (sentence_cursor, sentences_applied) =
         drain(&app, &db, &client, "sentences", base_cursor, target).await?;
 
@@ -388,6 +388,286 @@ pub async fn delete_sentence(state: State<'_, AppState>, id: String) -> Result<(
         Ok(())
     })
     .await
+}
+
+// ---------------------------------------------------------------------------
+// 阅读文章（本地功能，与同步无关）
+// ---------------------------------------------------------------------------
+//
+// 文章是纯本机数据：不进 `words`/`sentences`，不参与同步，也不影响 PC 端。
+
+#[tauri::command]
+pub async fn list_articles(state: State<'_, AppState>) -> Result<Vec<db::ArticleSummary>, String> {
+    let db = state.db.clone();
+    blocking(db, db::list_articles).await
+}
+
+#[tauri::command]
+pub async fn get_article(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<db::ArticleDetail, String> {
+    let db = state.db.clone();
+    blocking(db, move |conn| {
+        db::get_article(conn, &id)?.ok_or_else(|| format!("文章不存在：{id}"))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn save_article(
+    state: State<'_, AppState>,
+    title: String,
+    body: String,
+) -> Result<db::ArticleDetail, String> {
+    let db = state.db.clone();
+    blocking(db, move |conn| db::save_article(conn, &title, &body)).await
+}
+
+/// 删除单篇文章。前端负责二次确认（这里只保证「一次调用只删一个 id」）。
+#[tauri::command]
+pub async fn delete_article(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let db = state.db.clone();
+    blocking(db, move |conn| db::delete_article(conn, &id)).await
+}
+
+// ---------------------------------------------------------------------------
+// 阅读：查词与段落翻译（带本地缓存）
+// ---------------------------------------------------------------------------
+
+/// 缓存优先：命中就直接返回，未命中才调用 `fetch`。
+///
+/// 抽成独立函数是为了让「同一个词/段不重复发请求」这条约束能被单测锁死
+/// —— 它是成功标准 3 与「缓存命中」契约的直接落点。
+pub(crate) async fn cache_first<F, Fut>(
+    cached: Option<Value>,
+    fetch: F,
+) -> Result<(Value, bool), String>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<Value, String>>,
+{
+    if let Some(hit) = cached {
+        return Ok((hit, true));
+    }
+    Ok((fetch().await?, false))
+}
+
+/// PC 查词通道的短期熔断：手机没开电脑时，点词不该每次都先等一次连接失败。
+/// 失败后 60 秒内直接走直连有道（存的是上次失败时间）。
+static PC_LOOKUP_COOLDOWN_MS: AtomicI64 = AtomicI64::new(0);
+const PC_LOOKUP_COOLDOWN: i64 = 60_000;
+
+fn pc_lookup_allowed(now_ms: i64) -> bool {
+    now_ms - PC_LOOKUP_COOLDOWN_MS.load(Ordering::Relaxed) > PC_LOOKUP_COOLDOWN
+}
+
+/// 已配对时优先走 PC 的只读查词接口（`/api/lookup`）。
+///
+/// 任何失败都只是「回落」：不报错、不影响功能，只是下次直接走直连。
+/// 这样手机能连 PC 但上不了外网时（热点 / 内网）仍然能查词。
+async fn try_pc_lookup(state: &State<'_, AppState>, word: &str) -> Option<dict::WordLookup> {
+    let now = settings::now_ms();
+    if !pc_lookup_allowed(now) {
+        return None;
+    }
+
+    let (base, token) = {
+        let guard = state.settings.lock().ok()?;
+        let pairing = guard.pairing.clone()?;
+        (pairing.base, pairing.token)
+    };
+
+    match SyncClient::new(&base).with_token(token).lookup(word).await {
+        // PC 端返回的就是 `dict::WordLookup` 的形状（同字段名）
+        Ok(value) => serde_json::from_value::<dict::WordLookup>(value).ok(),
+        Err(_) => {
+            PC_LOOKUP_COOLDOWN_MS.store(now, Ordering::Relaxed);
+            None
+        }
+    }
+}
+
+/// 取词条：本机缓存 → PC（已配对且未熔断时优先）→ 直连有道；成功后写缓存。
+///
+/// 返回的 `bool` 表示**是否命中本机缓存**：走 PC 不算缓存命中，那是另一条网络通道，
+/// 前端据它显示「释义来自本机缓存」。
+async fn resolve_word_entry(
+    state: &State<'_, AppState>,
+    word: &str,
+) -> Result<(dict::WordLookup, bool), String> {
+    let db = state.db.clone();
+    let key = dict::word_cache_key(word);
+    let cached = {
+        let key = key.clone();
+        blocking(db.clone(), move |conn| {
+            Ok(db::article_cache_get(conn, &key))
+        })
+        .await?
+    };
+
+    if let Some(hit) = cached {
+        let entry: dict::WordLookup =
+            serde_json::from_value(hit).map_err(|e| format!("词条数据损坏：{e}"))?;
+        return Ok((entry, true));
+    }
+
+    let entry = match try_pc_lookup(state, word).await {
+        Some(entry) => entry,
+        None => dict::fetch_word(word).await?,
+    };
+
+    let data = serde_json::to_value(&entry).map_err(|e| format!("序列化词条失败：{e}"))?;
+    blocking(db, move |conn| {
+        db::article_cache_put(conn, &key, "word", &data)
+    })
+    .await?;
+
+    Ok((entry, false))
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WordLookupResult {
+    #[serde(flatten)]
+    pub entry: dict::WordLookup,
+    /// 该词所在的句子（前端高亮用）
+    pub sentence: Option<String>,
+    pub sentence_trans: Option<String>,
+    /// 句译文单独失败时的提示：此时词卡本身仍然可用，不应该整张卡报错
+    pub sentence_error: Option<String>,
+    /// 词典数据是否来自本地缓存（断网时 cached=true 就是「读缓存仍可用」的证据）
+    pub cached: bool,
+}
+
+/// 查一个词：词典数据 + 它在文中所属句子的译文。
+#[tauri::command]
+pub async fn lookup_word(
+    state: State<'_, AppState>,
+    word: String,
+    sentence: Option<String>,
+) -> Result<WordLookupResult, String> {
+    let word = word.trim().to_string();
+    if word.is_empty() {
+        return Err("没有选中单词".to_string());
+    }
+    let sentence = sentence
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let db = state.db.clone();
+
+    // --- 1. 词典部分（按词缓存，与所在句子无关；已配对时优先问 PC）---
+    let (entry, cached_hit) = resolve_word_entry(&state, &word).await?;
+
+    // --- 2. 句中译文（按句子缓存：同一个词在不同句子里不能互相串）---
+    let mut sentence_trans = None;
+    let mut sentence_error = None;
+    if let Some(sentence) = sentence.clone() {
+        let key = dict::text_cache_key("s", &sentence);
+        let cached = {
+            let key = key.clone();
+            blocking(db.clone(), move |conn| {
+                Ok(db::article_cache_get(conn, &key))
+            })
+            .await?
+        };
+        match cache_first(cached, || async {
+            dict::fetch_translation(&sentence).await.map(|t| json!(t))
+        })
+        .await
+        {
+            Ok((value, hit)) => {
+                if !hit {
+                    let data = value.clone();
+                    let key = key.clone();
+                    blocking(db.clone(), move |conn| {
+                        db::article_cache_put(conn, &key, "sentence", &data)
+                    })
+                    .await?;
+                }
+                sentence_trans = value.as_str().map(str::to_string);
+            }
+            // 句译文失败只降级，不让整张词卡失败
+            Err(err) => sentence_error = Some(err),
+        }
+    }
+
+    Ok(WordLookupResult {
+        entry,
+        sentence,
+        sentence_trans,
+        sentence_error,
+        cached: cached_hit,
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ParagraphTranslation {
+    pub trans: String,
+    pub cached: bool,
+}
+
+/// 翻译一整段（「译」按钮）。
+#[tauri::command]
+pub async fn translate_paragraph(
+    state: State<'_, AppState>,
+    text: String,
+) -> Result<ParagraphTranslation, String> {
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Err("这一段没有内容".to_string());
+    }
+
+    let db = state.db.clone();
+    let key = dict::text_cache_key("p", &text);
+    let cached = {
+        let key = key.clone();
+        blocking(db.clone(), move |conn| {
+            Ok(db::article_cache_get(conn, &key))
+        })
+        .await?
+    };
+
+    let (value, hit) = cache_first(cached, || async {
+        dict::fetch_translation(&text).await.map(|t| json!(t))
+    })
+    .await?;
+
+    if !hit {
+        let data = value.clone();
+        blocking(db.clone(), move |conn| {
+            db::article_cache_put(conn, &key, "paragraph", &data)
+        })
+        .await?;
+    }
+
+    let trans = value
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| "翻译结果格式异常".to_string())?;
+    Ok(ParagraphTranslation { trans, cached: hit })
+}
+
+// ---------------------------------------------------------------------------
+// 阅读：本机收藏
+// ---------------------------------------------------------------------------
+
+/// 把阅读页查到的词加进本机词库。
+///
+/// 只收一个 `word`：词典字段从**同一条查词缓存**里取，前端不搬运、也无法伪造词义。
+#[tauri::command]
+pub async fn add_local_word(
+    state: State<'_, AppState>,
+    word: String,
+) -> Result<db::LocalWordAdd, String> {
+    let word = word.trim().to_string();
+    if word.is_empty() {
+        return Err("没有选中单词".to_string());
+    }
+
+    let db = state.db.clone();
+    let (entry, _) = resolve_word_entry(&state, &word).await?;
+    blocking(db, move |conn| db::add_local_word(conn, &word, &entry)).await
 }
 
 // ---------------------------------------------------------------------------
@@ -606,7 +886,7 @@ pub async fn reset_all(state: State<'_, AppState>) -> Result<(), String> {
     blocking(db, move |conn| {
         conn.execute_batch(
             "DELETE FROM words; DELETE FROM sentences; DELETE FROM daily_stats; \
-             DELETE FROM sync_state;",
+             DELETE FROM sync_state; DELETE FROM articles; DELETE FROM article_cache;",
         )
         .map_err(|e| format!("重置失败：{e}"))?;
         Ok(())
@@ -618,6 +898,29 @@ pub async fn reset_all(state: State<'_, AppState>) -> Result<(), String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// 契约「PC 未运行时自动回落直连」的实现点：
+    /// 一次失败后 60 秒内不再试 PC（否则连着点词会每次都先卡一次连接失败）。
+    #[test]
+    fn pc_lookup_cooldown_blocks_repeated_attempts() {
+        let now = 1_760_000_000_000i64;
+        PC_LOOKUP_COOLDOWN_MS.store(now, Ordering::Relaxed);
+
+        assert!(!pc_lookup_allowed(now), "刚失败过就该跳过 PC");
+        assert!(!pc_lookup_allowed(now + 1_000));
+        assert!(
+            !pc_lookup_allowed(now + PC_LOOKUP_COOLDOWN),
+            "窗口内仍不再试"
+        );
+        assert!(
+            pc_lookup_allowed(now + PC_LOOKUP_COOLDOWN + 1),
+            "超出窗口后允许再试"
+        );
+
+        // 复位：这是进程级静态，别影响同进程的其它测试
+        PC_LOOKUP_COOLDOWN_MS.store(0, Ordering::Relaxed);
+        assert!(pc_lookup_allowed(now));
+    }
 
     /// 详情页靠 `usual_dict` 渲染释义、靠 `exchange` 渲染「词形变化」，
     /// 这两个字段必须真的下发（之前 `get_card` 漏了 exchange，前端读了空）。
@@ -750,10 +1053,7 @@ pub async fn check_update(
 /// 下载 APK 到应用缓存目录（该目录已被 manifest 里的 FileProvider 暴露），
 /// 返回本地路径——由前端再交给系统安装器。
 #[tauri::command]
-pub async fn download_update(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<String, String> {
+pub async fn download_update(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
     use futures_util::StreamExt;
     use std::io::Write;
 
@@ -807,8 +1107,8 @@ fn install_apk_via_system(path: &str) -> Result<(), String> {
     use jni::JavaVM;
 
     let ctx = ndk_context::android_context();
-    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }
-        .map_err(|e| format!("JNI 初始化失败: {e}"))?;
+    let vm =
+        unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("JNI 初始化失败: {e}"))?;
     let mut env = vm
         .attach_current_thread()
         .map_err(|e| format!("attach 当前线程失败: {e}"))?;
@@ -816,7 +1116,12 @@ fn install_apk_via_system(path: &str) -> Result<(), String> {
 
     // 1) 从 Activity 拿 ClassLoader
     let loader = env
-        .call_method(&activity, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+        .call_method(
+            &activity,
+            "getClassLoader",
+            "()Ljava/lang/ClassLoader;",
+            &[],
+        )
         .and_then(|v| v.l())
         .map_err(|e| format!("取 ClassLoader 失败: {e}"))?;
 
@@ -880,6 +1185,8 @@ pub fn run() {
 
             let db_path = dir.join("vocab.db");
             let conn = db::open(&db_path)?;
+            // 内置阅读素材只在首次启动写一次（标记存在 sync_state 里）
+            db::seed_builtin_articles(&conn)?;
             let settings_path = dir.join("settings.json");
 
             app.manage(AppState {
@@ -901,6 +1208,13 @@ pub fn run() {
             browse_words,
             browse_sentences,
             delete_sentence,
+            list_articles,
+            get_article,
+            save_article,
+            delete_article,
+            lookup_word,
+            translate_paragraph,
+            add_local_word,
             get_card,
             build_queue,
             get_progress,

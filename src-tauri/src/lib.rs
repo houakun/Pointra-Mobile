@@ -1,6 +1,6 @@
 //! Pointra Mobile 数据层与 Android 壳。
 //!
-//! 数据/算法层（`db` / `sm2` / `session` / `browse` / `sync_client`）刻意**不依赖 Tauri**：
+//! 数据/算法层（`articles` / `db` / `sm2` / `session` / `browse` / `sync_client`）刻意**不依赖 Tauri**：
 //! 它们可以在桌面上用 `cargo test` 全量验证。Tauri 只负责把这一层暴露成命令。
 //!
 //! 与 PC 端的契约（见 `docs/01-需求与架构设计.md`）：
@@ -8,9 +8,11 @@
 //! - 重复收到同一条记录时，**只能刷新词义，不能重置学习进度**；
 //! - `seq` 是全局唯一且单调递增的同步游标。
 
+pub mod articles;
 pub mod browse;
 pub mod commands;
 pub mod db;
+pub mod dict;
 pub mod session;
 pub mod settings;
 pub mod sm2;

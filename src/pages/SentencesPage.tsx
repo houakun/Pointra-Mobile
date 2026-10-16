@@ -76,11 +76,9 @@ export default function SentencesPage({ onToast, onOpen }: Props) {
               className="main tappable"
               onClick={() => onOpen(it.id, "sentence")}
             >
+              {/* 列表只显示英文原句：译文点进详情页再看（搜索仍会匹配译文） */}
               <div className="title" style={{ whiteSpace: "normal" }}>
                 {it.text}
-              </div>
-              <div className="sub" style={{ whiteSpace: "normal" }}>
-                {it.gloss || "—"}
               </div>
             </div>
             <button className="btn danger small" onClick={() => remove(it.id)}>

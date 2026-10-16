@@ -121,3 +121,76 @@ export interface UpdateProgress {
   downloaded: number;
   total: number;
 }
+
+// ---------------------------------------------------------------------------
+// 阅读
+// ---------------------------------------------------------------------------
+
+/** 文章列表项（不含正文） */
+export interface ArticleSummary {
+  id: string;
+  title: string;
+  /** `builtin` = 内置素材；`import` = 自己粘贴导入 */
+  source: string;
+  /** 四六级核心词（只有内置素材有） */
+  keywords: string[];
+  /** 素材出处：真题写「某年某套真题 · 选自某刊」；导入文章为空 */
+  origin: string;
+  /** 考试类型：`cet4` / `cet6`；自写示例与导入文章为空串 */
+  exam: string;
+  /** 真题年份；自写示例与导入文章为 null */
+  year: number | null;
+  paragraph_count: number;
+  created_at: number;
+}
+
+/** 文章详情：段落由 Rust 侧按规则切好（见 articles::split_paragraphs） */
+export interface ArticleDetail {
+  id: string;
+  title: string;
+  source: string;
+  keywords: string[];
+  origin: string;
+  created_at: number;
+  paragraphs: string[];
+}
+
+/** 按词性分组的一组释义 */
+export interface DictGroup {
+  pos: string;
+  values: string[];
+}
+
+/**
+ * 词卡数据（Rust `WordLookupResult`）。
+ * `entry` 在 Rust 侧用了 `#[serde(flatten)]`，所以字段是摊平的。
+ */
+export interface WordLookup {
+  word: string;
+  phonetic_us: string | null;
+  phonetic_uk: string | null;
+  /** 主释义（最多 3 个义项） */
+  dit: string | null;
+  usual_dict: DictGroup[];
+  exchange: Record<string, string[]>;
+  /** 该词所在的句子（前端高亮用） */
+  sentence: string | null;
+  sentence_trans: string | null;
+  /** 句中译文单独失败时的提示：词卡主体仍然可用 */
+  sentence_error: string | null;
+  /** 词典数据来自本地缓存（断网时 `true` 说明是读缓存） */
+  cached: boolean;
+}
+
+export interface ParagraphTranslation {
+  trans: string;
+  cached: boolean;
+}
+
+/** `add_local_word` 的结果 */
+export interface LocalWordAdd {
+  id: string;
+  word: string;
+  /** `true` = 这个词本机已经收藏过，这次只刷新了词义 */
+  existed: boolean;
+}

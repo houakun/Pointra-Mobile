@@ -140,6 +140,30 @@ impl SyncClient {
             .map_err(|e| format!("拉取 {table} 失败：{e}"))?;
         decode(resp).await
     }
+
+    /// 阅读页查词：`GET /api/lookup?q=<词>`（PC 端只读接口）。
+    ///
+    /// 返回的 JSON 与 `dict::WordLookup` 同形状，调用方可以直接反序列化。
+    /// 它的价值：手机能连到 PC、但自己上不了外网时（热点 / 内网）依然能查词。
+    pub async fn lookup(&self, word: &str) -> Result<Value, String> {
+        let token = self
+            .token
+            .as_ref()
+            .ok_or_else(|| "尚未配对，缺少访问令牌".to_string())?;
+        // 不用 `.query()`：移动端 reqwest 没开 `query` feature，
+        // 而且词里可能带撇号（`company's`），必须走 URL 编码。
+        let mut url = reqwest::Url::parse(&format!("{}/api/lookup", self.base))
+            .map_err(|e| format!("接口地址非法：{e}"))?;
+        url.query_pairs_mut().append_pair("q", word);
+        let resp = self
+            .http
+            .get(url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|e| format!("无法连接电脑端：{e}"))?;
+        decode(resp).await
+    }
 }
 
 async fn decode<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T, String> {
@@ -202,8 +226,7 @@ mod tests {
 
     #[test]
     fn paired_info_tolerates_missing_server_name() {
-        let info: PairedInfo =
-            serde_json::from_str(r#"{"token":"t","device_id":"d"}"#).unwrap();
+        let info: PairedInfo = serde_json::from_str(r#"{"token":"t","device_id":"d"}"#).unwrap();
         assert_eq!(info.token, "t");
         assert!(info.server_name.is_none());
     }

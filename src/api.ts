@@ -1,9 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  ArticleDetail,
+  ArticleSummary,
   BrowsePage,
   CardDetail,
   CardKind,
+  LocalWordAdd,
   Overview,
+  ParagraphTranslation,
   PingInfo,
   Progress,
   QueueEntry,
@@ -11,6 +15,7 @@ import type {
   StateFilter,
   SyncReport,
   UpdateInfo,
+  WordLookup,
 } from "./types";
 
 /**
@@ -81,6 +86,24 @@ export const api = {
   downloadUpdate: () => invoke<string>("download_update"),
   /** 拉起系统安装器安装已下载的 APK（JNI 调 Kotlin 助手，不走 ACL） */
   installUpdate: (path: string) => invoke<void>("install_update", { path }),
+
+  // --- 阅读 ---------------------------------------------------------------
+
+  listArticles: () => invoke<ArticleSummary[]>("list_articles"),
+  getArticle: (id: string) => invoke<ArticleDetail>("get_article", { id }),
+  saveArticle: (title: string, body: string) =>
+    invoke<ArticleDetail>("save_article", { title, body }),
+  /** 删除单篇文章（UI 层负责二次确认） */
+  deleteArticle: (id: string) => invoke<void>("delete_article", { id }),
+
+  /** 查词：词典数据 + 该词所在句子的译文；结果在 Rust 侧缓存 */
+  lookupWord: (word: string, sentence: string | null) =>
+    invoke<WordLookup>("lookup_word", { word, sentence }),
+  /** 翻译整段（段落「译」按钮）；结果在 Rust 侧缓存 */
+  translateParagraph: (text: string) =>
+    invoke<ParagraphTranslation>("translate_paragraph", { text }),
+  /** 加入本机单词本（本机 id/seq 与 PC 下发的隔开，见 Rust 侧注释） */
+  addLocalWord: (word: string) => invoke<LocalWordAdd>("add_local_word", { word }),
 };
 
 /** 有道在线发音 URL（R3）。Android 端只用 HTML5 audio 播放，不移植 rodio。 */

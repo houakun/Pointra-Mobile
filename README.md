@@ -14,10 +14,24 @@
 | 速记 | 竖排单词快速过一遍：点词行内出释义（可同时展开多张）、左滑＝标记太简单、连续滚动 |
 | 词库 | 前缀索引搜索 + 状态/首字母/**加入日期**筛选 + 排序切换；分页 + 虚拟滚动；点词进详情页 |
 | 句子本 | 列表 / 搜索 / 单条删除；点进句子详情 |
+| 阅读 | **四六级文章全文阅读**：**按 4/6 级 + 年份分类浏览**（筛选 chips 带计数 + 年份分组）；点任意单词弹词卡（音标 + 发音 + 按词性分组释义 + 所在句译文）、每段一键出/收译文；内置 **3 篇示例 + 140 篇四六级真题选文（四级 70 + 六级 70，2015–2026 全量）**（逐篇标明年份/套次与原文刊物），支持粘贴导入（多篇用 `---` 分隔可一次导入） |
 | 设置 | 配对、每日上限、发音偏好、**应用更新**（应用内一键升级）、重置本机数据 |
 
 - **简化 SM-2**：不认识 → 当日回队尾；我认识 → 间隔 1 → 6 → ×ease；太简单 → 毕业不再入队；日界 04:00
 - **重复收藏**只刷新词义，**不重置学习进度**
+- **阅读查词**：点词走「已配对时优先问电脑端（`GET /api/lookup`）→ 否则手机直连有道」，结果落本地缓存，
+  同一个词/段不重复请求；断网时已查过的词与已翻译的段落仍可看（会明确提示网络失败，不会崩）
+- **加入单词本**：阅读页收藏的词只存本机（`mobile-<hash>` id + 负 `seq`，与电脑端下发的记录互不覆盖），
+  立即可背可复习；本轮不回传电脑端
+- **阅读素材**：内置 143 篇（3 篇自写示例 + 140 篇四六级真题长篇阅读选文：四级 70 + 六级 70，
+  即 2015–2026 年**全部** 140 套逻辑的选文，各约 1000–1250 词），逐篇在 front-matter 里标明年份/套次/原文刊物
+  （如「2025 年 12 月英语六级真题 · 第 1 套（选自 The Guardian）」）。
+  **素材清单由 `build.rs` 扫描 `src-tauri/assets/articles/*.md` 自动生成**：加一篇真题只需把 md 丢进那个目录，不用改 Rust 代码；
+  批量抓取用 `node scripts/import-cet-articles.mjs --exam all [--year 2022]`（幂等，已导入的套次会跳过）；
+  内置素材是**按 id 增量补插**的，已装 App 的用户下次启动就能拿到新文章（你手动删掉的不会自己复活）。
+  **素材源：四六级真题阅读选文本身改编自外刊，版权归原作者/出版方所有，此处仅供个人背单词使用**。
+  加文章：往 `src-tauri/assets/articles/` 放一个 md（front-matter: `id/title/source/keywords`）并在 `ARTICLE_FILES` 里加一行；
+  内置素材是**按 id 增量补插**的，已装 App 的用户下次启动就能拿到新文章（你手动删掉的不会自己复活）。
 - **应用内自更新**：从电脑端同步服务拉新版本 → 下载 → JNI 直接拉起系统安装器
 
 ## 安装
@@ -57,15 +71,19 @@ powershell -ExecutionPolicy Bypass -File scripts/publish-update.ps1
 ## 目录
 
 ```
-src/                  React 前端（5 个页面 + 速记页 + 单词详情页）
+src/                  React 前端（6 个页面 + 速记页 + 单词详情页 + 阅读词卡组件）
+src-tauri/assets/articles/  内置阅读素材（每篇一个 md，带 front-matter 出处；清单由 build.rs 自动生成）
+scripts/import-cet-articles.mjs  批量抓取四六级真题选文（按年份/考试类型）
 src-tauri/src/        Rust 数据层（不依赖 Tauri，可桌面单测）
-  db.rs               SQLite：words / sentences / daily_stats / sync_state
+  db.rs               SQLite：words / sentences / daily_stats / sync_state / articles / article_cache
   sm2.rs              简化 SM-2 + 04:00 日界
   session.rs          学习队列 + 今日统计
   browse.rs           词库/句子本分页检索（前缀走索引、加入日期筛选）
-  sync_client.rs      配对 / 增量拉取
+  articles.rs         阅读素材（段落切分规则 + 解析 `assets/articles/*.md`）
+  dict.rs             阅读查词/段落翻译：有道解析 + 降级链 + 缓存键
+  sync_client.rs      配对 / 增量拉取 / 查词转发
   sync_events.rs      WebSocket + 指数退避重连 + since 补拉
-  commands.rs         Tauri 命令层（含自更新下载与安装）
+  commands.rs         Tauri 命令层（含阅读、收藏与自更新下载安装）
   settings.rs         本地设置（原子写）
 src-tauri/gen/android Tauri 生成的 Android 工程（含明文 HTTP 放行、浅色主题、ApkInstaller.kt）
 docs/                 需求与架构设计、Android 环境与构建踩坑记录
@@ -75,10 +93,13 @@ scripts/              build-apk.sh / publish-update.ps1
 ## 测试
 
 ```bash
-cd src-tauri && cargo test --lib     # 56 passed
+cd src-tauri && cargo test --lib     # 79 passed（含 2 个需要联网、默认 --ignored 的用例）
 cd src-tauri && cargo clippy --lib   # 0 warnings
 npx tsc --noEmit                     # 通过
 ```
+
+联网用例要手动跑：`cargo test --lib -- --ignored live_`（真实请求有道，验证解析与整段译文）。
+PC 端同理：`cargo test --lib -- --ignored live_lookup_`（验证 `/api/lookup` 返回字段与手机直连一致）。
 
 ## 已知限制（诚实标注）
 

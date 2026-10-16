@@ -6,12 +6,13 @@ import { useBackGuard } from "./hooks/useBackGuard";
 import TodayPage from "./pages/TodayPage";
 import StudyPage from "./pages/StudyPage";
 import MemoPage from "./pages/MemoPage";
+import ReaderPage from "./pages/ReaderPage";
 import WordDetailPage from "./pages/WordDetailPage";
 import VocabPage from "./pages/VocabPage";
 import SentencesPage from "./pages/SentencesPage";
 import SettingsPage from "./pages/SettingsPage";
 
-type Tab = "today" | "vocab" | "sentences" | "settings";
+type Tab = "today" | "reader" | "vocab" | "sentences" | "settings";
 
 const EMPTY_OVERVIEW: Overview = {
   word_count: 0,
@@ -179,6 +180,9 @@ export default function App() {
             syncHint={settings.pairing ? `同步：${settings.pairing.base}` : "未配对，去设置页配对"}
           />
         )}
+        {tab === "reader" && (
+          <ReaderPage accent={settings.audio_accent} onToast={showToast} onChanged={refresh} />
+        )}
         {tab === "vocab" && (
           <VocabPage
             onToast={showToast}
@@ -221,6 +225,7 @@ export default function App() {
 
       <nav className="tabbar">
         <TabButton icon="📅" label="今日" active={tab === "today"} onClick={() => setTab("today")} />
+        <TabButton icon="📖" label="阅读" active={tab === "reader"} onClick={() => setTab("reader")} />
         <TabButton icon="📚" label="词库" active={tab === "vocab"} onClick={() => setTab("vocab")} />
         <TabButton
           icon="💬"

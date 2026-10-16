@@ -808,3 +808,268 @@ select:focus {
   padding-top: 8px;
   font-size: 12px;
 }
+
+/* ---------------------------------------------------------------------------
+   阅读
+   --------------------------------------------------------------------------- */
+
+.btn.primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn.primary:active {
+  background: var(--accent-2);
+}
+
+.btn.wide {
+  width: 100%;
+  padding: 12px;
+  border-radius: 14px;
+  font-weight: 600;
+}
+
+.textarea {
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  outline: none;
+  width: 100%;
+  resize: vertical;
+}
+
+.textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(18, 192, 140, 0.12);
+}
+
+.reader-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.reader-title {
+  margin: 10px 0 4px;
+}
+
+.reader-hint {
+  margin-bottom: 10px;
+}
+
+/* 分类筛选（全部 / 四级 / 六级 / 示例导入） */
+.reader-filters {
+  margin-bottom: 8px;
+}
+
+/* 分组标题：按年份分组，或「示例与导入」 */
+.reader-group {
+  margin: 14px 2px 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.reader-group:first-child {
+  margin-top: 2px;
+}
+
+/* 真题出处（「2025 年 12 月英语四级真题 · 第 1 套…」）：弱化但可见 */
+.reader-origin {
+  margin: -4px 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.list-item .sub.origin {
+  font-size: 11px;
+  line-height: 1.45;
+  margin-top: 2px;
+  opacity: 0.9;
+}
+
+.reader-body {
+  padding-bottom: 30px;
+}
+
+.para {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 14px 12px;
+  margin-bottom: 12px;
+  box-shadow: var(--shadow);
+}
+
+/* 字号与行高都要比列表大：点词时不能误触相邻词 */
+.para-text {
+  font-size: 17px;
+  line-height: 1.9;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+/* 可点单词：默认只有很淡的下划线提示「这里能点」 */
+.rw {
+  cursor: pointer;
+  border-bottom: 1px dotted var(--line);
+}
+
+.rw:active {
+  background: var(--accent-soft);
+}
+
+/* 四六级核心词 */
+.rw.kw {
+  border-bottom: 1px solid var(--accent);
+  color: var(--accent-2);
+  font-weight: 600;
+}
+
+.para-btn {
+  margin-top: 10px;
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+
+.para-btn:disabled {
+  opacity: 0.6;
+}
+
+.para-trans {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+/* --- 底部词卡 / 导入弹层 --------------------------------------------------- */
+
+.sheet-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 40, 33, 0.35);
+  display: flex;
+  align-items: flex-end;
+  z-index: 50;
+}
+
+.sheet {
+  width: 100%;
+  max-height: 82%;
+  overflow-y: auto;
+  background: var(--panel);
+  border-radius: 18px 18px 0 0;
+  padding: 8px 16px calc(16px + var(--safe-bottom));
+  box-shadow: 0 -6px 24px rgba(18, 120, 90, 0.12);
+  animation: sheetUp 0.18s ease-out;
+}
+
+@keyframes sheetUp {
+  from {
+    transform: translateY(24px);
+    opacity: 0.6;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.sheet-grip {
+  width: 40px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--line);
+  margin: 6px auto 10px;
+}
+
+.sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sheet-word {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+}
+
+.sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 10px;
+}
+
+.sheet-phon {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.phon {
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+
+.phon.on {
+  color: var(--accent-2);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.sheet-sentence {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.65;
+  margin-bottom: 6px;
+}
+
+.sheet-trans {
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.sheet-hint {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.sheet-error {
+  margin: 24px 0;
+  text-align: center;
+  color: var(--red);
+  line-height: 1.7;
+}
+
+/* 第 5 个 tab 上线后每格约 84px，字号略收一点避免换行 */
+.tabbar button {
+  font-size: 11px;
+}
+
+.tabbar .icon {
+  font-size: 17px;
+}
