@@ -85,6 +85,13 @@ for d in "$JNI_ROOT"/*/; do
 done
 
 echo "==> 3/3 Gradle 打包（:app:$TASK）"
+
+# 【易错点】AGP 的 package 任务在**目标 APK 已存在**时会就地追加内容，
+# 产物会逐次膨胀（实测：干净打包 171MB，第二次不删旧包变 335MB，
+# 文件比 zip 实际内容多出 160MB+）。构建前先删掉旧产物。
+CLEAN_APK="$ROOT/src-tauri/gen/android/app/build/outputs/apk/$FLAVOR_LC/$MODE/app-$FLAVOR_LC-$MODE.apk"
+rm -f "$CLEAN_APK"
+
 cd src-tauri/gen/android
 # 必须写全 :app: —— 带前导冒号的路径只在「根项目」里找任务，
 # AGP 的 assemble 任务实际都在 :app 子模块上。
