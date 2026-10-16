@@ -28,10 +28,8 @@ impl Default for DailyGoals {
 }
 
 /// `(kind, table, 正面文本列)`。表名走内部常量，不接受外部输入。
-const TABLES: [(&str, &str, &str); 2] = [
-    ("word", "words", "word"),
-    ("sentence", "sentences", "text"),
-];
+const TABLES: [(&str, &str, &str); 2] =
+    [("word", "words", "word"), ("sentence", "sentences", "text")];
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct QueueEntry {
@@ -347,7 +345,12 @@ mod tests {
         let conn = db::open_in_memory().unwrap();
         word(&conn, 1, "w1", "scout");
         record_grade(&conn, "words", "w1", Grade::Good, NOW, TZ, true).unwrap();
-        assert_eq!(today_progress(&conn, NOW, TZ, DailyGoals::default()).unwrap().new_done, 1);
+        assert_eq!(
+            today_progress(&conn, NOW, TZ, DailyGoals::default())
+                .unwrap()
+                .new_done,
+            1
+        );
 
         // 次日 04:00 之后：新的学习日，计数从 0 开始
         let next_day = sm2::day_start(NOW, TZ) + DAY + 3_600_000;
@@ -362,7 +365,9 @@ mod tests {
         word(&conn, 1, "w1", "scout");
         record_grade(&conn, "words", "w1", Grade::TooEasy, NOW, TZ, true).unwrap();
 
-        assert!(build_queue(&conn, NOW, DailyGoals::default()).unwrap().is_empty());
+        assert!(build_queue(&conn, NOW, DailyGoals::default())
+            .unwrap()
+            .is_empty());
         assert!(
             build_queue(&conn, NOW + 400 * DAY, DailyGoals::default())
                 .unwrap()

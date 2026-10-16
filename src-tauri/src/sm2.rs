@@ -117,9 +117,15 @@ pub fn day_range_ms(date: &str, utc_offset_minutes: i64) -> Result<(i64, i64), S
     if parts.len() != 3 {
         return Err(format!("日期格式应为 YYYY-MM-DD：{date}"));
     }
-    let y: i64 = parts[0].parse().map_err(|_| format!("年份不合法：{date}"))?;
-    let m: u32 = parts[1].parse().map_err(|_| format!("月份不合法：{date}"))?;
-    let d: u32 = parts[2].parse().map_err(|_| format!("日期不合法：{date}"))?;
+    let y: i64 = parts[0]
+        .parse()
+        .map_err(|_| format!("年份不合法：{date}"))?;
+    let m: u32 = parts[1]
+        .parse()
+        .map_err(|_| format!("月份不合法：{date}"))?;
+    let d: u32 = parts[2]
+        .parse()
+        .map_err(|_| format!("日期不合法：{date}"))?;
     if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
         return Err(format!("日期不合法：{date}"));
     }
@@ -135,12 +141,7 @@ fn ease_after(prev_ease: f64, quality: i32) -> f64 {
 }
 
 /// 应用一次评分，返回新的卡片状态。
-pub fn apply(
-    prev: &CardState,
-    grade: Grade,
-    now_ms: i64,
-    utc_offset_minutes: i64,
-) -> CardState {
+pub fn apply(prev: &CardState, grade: Grade, now_ms: i64, utc_offset_minutes: i64) -> CardState {
     let mut next = prev.clone();
     let today = day_start(now_ms, utc_offset_minutes);
 

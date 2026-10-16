@@ -7,12 +7,12 @@
 //! - 重连成功后由前端触发一次 `sync_now` 补拉，补齐断线期间错过的记录。
 
 use crate::db;
+use futures_util::StreamExt;
+use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use futures_util::StreamExt;
-use rusqlite::Connection;
 use tauri::{AppHandle, Emitter};
 
 pub struct EventSession {

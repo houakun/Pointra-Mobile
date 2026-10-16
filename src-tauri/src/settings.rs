@@ -50,7 +50,8 @@ pub fn save(path: &Path, settings: &Settings) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("创建设置目录失败: {e}"))?;
     }
-    let text = serde_json::to_string_pretty(settings).map_err(|e| format!("序列化设置失败: {e}"))?;
+    let text =
+        serde_json::to_string_pretty(settings).map_err(|e| format!("序列化设置失败: {e}"))?;
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, text).map_err(|e| format!("写入设置失败: {e}"))?;
     std::fs::rename(&tmp, path).map_err(|e| format!("保存设置失败: {e}"))?;

@@ -289,7 +289,10 @@ mod tests {
     #[test]
     fn empty_filters_return_everything_paginated() {
         let conn = crate::db::open_in_memory().unwrap();
-        seed(&conn, &[("apple", "苹果"), ("banana", "香蕉"), ("cherry", "樱桃")]);
+        seed(
+            &conn,
+            &[("apple", "苹果"), ("banana", "香蕉"), ("cherry", "樱桃")],
+        );
 
         let page = browse_words(&conn, "", StateFilter::All, None, 0, 2).unwrap();
         assert_eq!(page.items.len(), 2);
@@ -475,7 +478,10 @@ mod tests {
             ..Default::default()
         };
         let page = search_words(&conn, q, 0, 50).unwrap();
-        assert_eq!(page.total, 1, "只有 apple 同时满足 前缀 ap + 复习中 + 当日加入");
+        assert_eq!(
+            page.total, 1,
+            "只有 apple 同时满足 前缀 ap + 复习中 + 当日加入"
+        );
         assert_eq!(page.items[0].text, "apple");
     }
 
@@ -497,7 +503,11 @@ mod tests {
 
         let alpha = search_words(&conn, WordQuery::default(), 0, 50).unwrap();
         assert_eq!(
-            alpha.items.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(),
+            alpha
+                .items
+                .iter()
+                .map(|i| i.text.as_str())
+                .collect::<Vec<_>>(),
             vec!["apple", "banana", "cherry"]
         );
 
@@ -507,7 +517,11 @@ mod tests {
         };
         let newest = search_words(&conn, q, 0, 50).unwrap();
         assert_eq!(
-            newest.items.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(),
+            newest
+                .items
+                .iter()
+                .map(|i| i.text.as_str())
+                .collect::<Vec<_>>(),
             vec!["banana", "cherry", "apple"]
         );
     }
