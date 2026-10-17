@@ -1007,13 +1007,25 @@ fn parse_version(v: &str) -> (u64, u64, u64) {
     )
 }
 
-/// 带 UA 的客户端：GitHub 的接口/附件会拒绍没有 User-Agent 的请求。
+/// 带 UA 的客户端：GitHub 的接口/附件会拒绝没有 User-Agent 的请求。
 ///
-/// 除了 reqwest 自带的超时，还显式设 `connect_timeout`：
-/// 某些网络下 TCP 能建上、但后续无响应，只靠请求级 timeout 会卡很久。
+/// TLS 用**编译期嵌入的根证书**（webpki-roots），不使用 Android 平台证书验证器：
+/// 后者需要运行时显式初始化，一旦没初始化，第一次 HTTPS 请求就会在 tokio 工作线程上
+/// panic（实测：界面无限转圈、连超时都兜不住）。
 fn update_client() -> Result<reqwest::Client, String> {
+    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+    let roots = rustls::RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
+    let tls = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| format!("初始化 TLS 配置失败：{e}"))?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+
     reqwest::Client::builder()
         .user_agent("Pointra-Mobile/update-check")
+        .use_preconfigured_tls(tls)
         .connect_timeout(std::time::Duration::from_secs(8))
         .timeout(std::time::Duration::from_secs(15))
         .build()
@@ -1030,19 +1042,32 @@ where
     F: std::future::Future<Output = Result<T, String>>,
 {
     match tokio::time::timeout(std::time::Duration::from_secs(secs), fut).await {
-        Ok(result) => result,
-        Err(_) => Err(format!("{what}超时（{secs} 秒）")),
+        Ok(result) => result,        Err(_) => Err(format!("{what}超时（{secs} 秒）")),
     }
 }
 
 /// 公网源查版本（GitHub Releases）。`Ok(None)` = 还没发布过 release。
 async fn check_update_online(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
-    let resp = update_client()?
+    // 诊断日志（Android 上会进 logcat）：更新走不通时要能看出卡在哪一步。
+    println!("[pointra-update] 开始在线检查 {ONLINE_META_URL}");
+    let client = update_client()?;
+    println!("[pointra-update] 客户端已就绪，发起请求");
+    let resp = client
         .get(ONLINE_META_URL)
         .timeout(std::time::Duration::from_secs(10))
         .send()
         .await
-        .map_err(|e| format!("连不上更新服务器：{e}"))?;
+        .map_err(|e| {
+            println!("[pointra-update] 请求失败：{e}");
+            if e.is_timeout() {
+                "连更新服务器超时".to_string()
+            } else if e.is_connect() {
+                "连不上更新服务器（可能没联网）".to_string()
+            } else {
+                format!("连不上更新服务器：{e}")
+            }
+        })?;
+    println!("[pointra-update] 收到响应 {}", resp.status());
 
     // 404 = 仓库还没发过 release，或附件名不对（不算错误，直接回落电脑端）
     if resp.status() == reqwest::StatusCode::NOT_FOUND {

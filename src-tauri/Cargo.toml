@@ -1,6 +1,6 @@
 [package]
 name = "pointra_mobile"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 description = "Pointra Mobile — Android 端数据层、简化 SM-2 与局域网同步客户端"
 
@@ -17,11 +17,17 @@ tauri = { version = "2", features = [] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# 局域网同步走明文 HTTP，本来不需要 TLS；
-# 但「不依赖电脑端的在线更新」要访问 GitHub Releases（只有 https），
-# 所以启用 rustls（纯 Rust，不需要 openssl/NDK 额外配置）。
-# 注：reqwest 0.13 的 feature 名是 `rustls`（0.12 才叫 `rustls-tls`，写错会直接编译失败）。
-reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
+# 局域网同步走明文 HTTP，本来不需要 TLS；但「不依赖电脑端的在线更新」
+# 要访问 GitHub Releases（只有 https），所以启用 rustls。
+#
+# 【坑】不要用 reqwest 的 `rustls` feature：它在 Android 上走「平台证书验证器」
+# （rustls-platform-verifier），需要显式初始化，否则第一次 HTTPS 请求会在 tokio
+# 工作线程上 panic（“Expect rustls-platform-verifier to be initialized”），
+# 表现为界面无限转圈。这里用 `rustls-no-provider` + **编译期嵌入的根证书**
+# （webpki-roots），行为完全确定，不依赖运行时初始化。
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "0.26"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net"] }
 # WebSocket 客户端（明文 ws://，默认特性即可）
 tokio-tungstenite = "0.26"
