@@ -34,6 +34,7 @@ const DEFAULT_SETTINGS: Settings = {
   pairing: null,
   goals: { new_per_day: 20, review_per_day: 100 },
   audio_accent: "us",
+  theme: "system",
   last_sync_at: null,
 };
 
@@ -124,6 +125,21 @@ export default function App() {
   useEffect(() => {
     if (tab === "today") refresh();
   }, [tab, refresh]);
+
+  // 主题：写到 <html data-theme>，由 CSS 变量接管。
+  // `system` 在 JS 里就解析成实际的 light/dark（并监听系统切换），
+  // 这样 CSS 只需要一份深色变量，不用再写一遍媒体查询。
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      const resolved =
+        settings.theme === "system" ? (mq.matches ? "dark" : "light") : settings.theme;
+      document.documentElement.dataset.theme = resolved;
+    };
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, [settings.theme]);
 
   // 覆盖页打开时，Android 返回键 / 全面屏边缘手势先关掉它，而不是退出整个 App。
   // 根页面（今日/词库/…）没有历史可回，则保持系统惯例（退出 App）。

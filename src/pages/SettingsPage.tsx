@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "../api";
-import type { Accent, Settings, SyncProgress, UpdateInfo, UpdateProgress } from "../types";
+import type { Accent, Settings, SyncProgress, Theme, UpdateInfo, UpdateProgress } from "../types";
 
 interface Props {
   settings: Settings;
@@ -160,6 +160,16 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
 
   const setAccent = async (accent: Accent) => {
     const next = { ...settings, audio_accent: accent };
+    onChange(next);
+    try {
+      await api.saveSettings(next);
+    } catch (e) {
+      onToast(`保存失败：${e}`);
+    }
+  };
+
+  const setTheme = async (theme: Theme) => {
+    const next = { ...settings, theme };
     onChange(next);
     try {
       await api.saveSettings(next);
@@ -342,6 +352,30 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
           </button>
           <button className={settings.audio_accent === "uk" ? "on" : ""} onClick={() => setAccent("uk")}>
             英音
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <strong>主题</strong>
+        <div className="chips" style={{ marginTop: 10 }}>
+          <button
+            className={settings.theme === "system" ? "on" : ""}
+            onClick={() => setTheme("system")}
+          >
+            跟随系统
+          </button>
+          <button
+            className={settings.theme === "light" ? "on" : ""}
+            onClick={() => setTheme("light")}
+          >
+            浅色
+          </button>
+          <button
+            className={settings.theme === "dark" ? "on" : ""}
+            onClick={() => setTheme("dark")}
+          >
+            深色
           </button>
         </div>
       </div>

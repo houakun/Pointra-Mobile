@@ -15,10 +15,14 @@ export interface DailyGoals {
 
 export type Accent = "us" | "uk";
 
+/** 主题：跟随系统 / 强制浅色 / 强制深色 */
+export type Theme = "system" | "light" | "dark";
+
 export interface Settings {
   pairing: Pairing | null;
   goals: DailyGoals;
   audio_accent: Accent;
+  theme: Theme;
   last_sync_at: number | null;
 }
 

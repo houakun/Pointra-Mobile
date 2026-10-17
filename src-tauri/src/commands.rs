@@ -12,7 +12,6 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -65,6 +64,7 @@ pub async fn save_settings(
     let mut next = guard.clone();
     next.goals = settings.goals;
     next.audio_accent = settings.audio_accent;
+    next.theme = settings.theme;
     settings::save(&state.settings_path, &next)?;
     *guard = next.clone();
     Ok(next)
@@ -453,45 +453,16 @@ where
     Ok((fetch().await?, false))
 }
 
-/// PC 查词通道的短期熔断：手机没开电脑时，点词不该每次都先等一次连接失败。
-/// 失败后 60 秒内直接走直连有道（存的是上次失败时间）。
-static PC_LOOKUP_COOLDOWN_MS: AtomicI64 = AtomicI64::new(0);
-const PC_LOOKUP_COOLDOWN: i64 = 60_000;
+// 查词**不依赖电脑端**：直连有道（`dict::fetch_word`）。
+//
+// 曾经做过「已配对时优先问 PC 的 /api/lookup」，但那样点词能不能出释义
+// 就取决于「电脑是否开机 + 是否配对 + 是否同一 WiFi」—— 实际用起来就是「查不了词」。
+// 现在纯走手机自己的网络，没联网时给明确的中文提示即可。
+// （PC 端的 /api/lookup 接口与 `sync_client::lookup` 都保留着，将来要用再说。）
 
-fn pc_lookup_allowed(now_ms: i64) -> bool {
-    now_ms - PC_LOOKUP_COOLDOWN_MS.load(Ordering::Relaxed) > PC_LOOKUP_COOLDOWN
-}
-
-/// 已配对时优先走 PC 的只读查词接口（`/api/lookup`）。
+/// 取词条：本机缓存 → 直连有道；成功后写缓存。
 ///
-/// 任何失败都只是「回落」：不报错、不影响功能，只是下次直接走直连。
-/// 这样手机能连 PC 但上不了外网时（热点 / 内网）仍然能查词。
-async fn try_pc_lookup(state: &State<'_, AppState>, word: &str) -> Option<dict::WordLookup> {
-    let now = settings::now_ms();
-    if !pc_lookup_allowed(now) {
-        return None;
-    }
-
-    let (base, token) = {
-        let guard = state.settings.lock().ok()?;
-        let pairing = guard.pairing.clone()?;
-        (pairing.base, pairing.token)
-    };
-
-    match SyncClient::new(&base).with_token(token).lookup(word).await {
-        // PC 端返回的就是 `dict::WordLookup` 的形状（同字段名）
-        Ok(value) => serde_json::from_value::<dict::WordLookup>(value).ok(),
-        Err(_) => {
-            PC_LOOKUP_COOLDOWN_MS.store(now, Ordering::Relaxed);
-            None
-        }
-    }
-}
-
-/// 取词条：本机缓存 → PC（已配对且未熔断时优先）→ 直连有道；成功后写缓存。
-///
-/// 返回的 `bool` 表示**是否命中本机缓存**：走 PC 不算缓存命中，那是另一条网络通道，
-/// 前端据它显示「释义来自本机缓存」。
+/// 返回的 `bool` 表示是否命中本机缓存（前端据它显示「释义来自本机缓存」）。
 async fn resolve_word_entry(
     state: &State<'_, AppState>,
     word: &str,
@@ -512,10 +483,7 @@ async fn resolve_word_entry(
         return Ok((entry, true));
     }
 
-    let entry = match try_pc_lookup(state, word).await {
-        Some(entry) => entry,
-        None => dict::fetch_word(word).await?,
-    };
+    let entry = dict::fetch_word(word).await?;
 
     let data = serde_json::to_value(&entry).map_err(|e| format!("序列化词条失败：{e}"))?;
     blocking(db, move |conn| {
@@ -898,29 +866,6 @@ pub async fn reset_all(state: State<'_, AppState>) -> Result<(), String> {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    /// 契约「PC 未运行时自动回落直连」的实现点：
-    /// 一次失败后 60 秒内不再试 PC（否则连着点词会每次都先卡一次连接失败）。
-    #[test]
-    fn pc_lookup_cooldown_blocks_repeated_attempts() {
-        let now = 1_760_000_000_000i64;
-        PC_LOOKUP_COOLDOWN_MS.store(now, Ordering::Relaxed);
-
-        assert!(!pc_lookup_allowed(now), "刚失败过就该跳过 PC");
-        assert!(!pc_lookup_allowed(now + 1_000));
-        assert!(
-            !pc_lookup_allowed(now + PC_LOOKUP_COOLDOWN),
-            "窗口内仍不再试"
-        );
-        assert!(
-            pc_lookup_allowed(now + PC_LOOKUP_COOLDOWN + 1),
-            "超出窗口后允许再试"
-        );
-
-        // 复位：这是进程级静态，别影响同进程的其它测试
-        PC_LOOKUP_COOLDOWN_MS.store(0, Ordering::Relaxed);
-        assert!(pc_lookup_allowed(now));
-    }
 
     /// 详情页靠 `usual_dict` 渲染释义、靠 `exchange` 渲染「词形变化」，
     /// 这两个字段必须真的下发（之前 `get_card` 漏了 exchange，前端读了空）。

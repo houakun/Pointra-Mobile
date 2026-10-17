@@ -18,8 +18,36 @@
   --red: #e9647f;
   --red-soft: #fdeef2;
   --shadow: 0 2px 10px rgba(18, 120, 90, 0.06);
+  --tabbar-bg: rgba(255, 255, 255, 0.96);
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/*
+ * 深色主题：逐个对应上面的浅色变量。
+ * `data-theme` 由 App 写入（`system` 在 JS 里就解析成 light/dark 并监听系统切换），
+ * 所以这里只需要一份，不用再写一遍 prefers-color-scheme。
+ */
+:root[data-theme="dark"] {
+  --bg: #0f1613;
+  --bg-top: #16211c;
+  --panel: #18231f;
+  --panel-2: #202d28;
+  --line: #2b3a34;
+  --text: #e4efea;
+  --muted: #93a79f;
+  --accent: #1ed39c;
+  --accent-2: #35e6ac;
+  --accent-soft: #16342b;
+  --green: #1ed39c;
+  --orange: #e9a63f;
+  --orange-soft: #3a2f1a;
+  --blue: #6ba4f0;
+  --blue-soft: #1b2a42;
+  --red: #f0788f;
+  --red-soft: #3a1f28;
+  --shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  --tabbar-bg: rgba(24, 35, 31, 0.96);
 }
 
 * {
@@ -36,8 +64,8 @@ body,
 
 body {
   background-color: var(--bg);
-  /* 顶部一层淡淡薄荷渐变，往下渐白，显得干净通透 */
-  background-image: linear-gradient(180deg, var(--bg-top) 0%, rgba(247, 251, 249, 0) 260px);
+  /* 顶部一层淡渐变，往下淡出（深色主题下自然变成渐黑） */
+  background-image: linear-gradient(180deg, var(--bg-top) 0%, transparent 260px);
   background-repeat: no-repeat;
   color: var(--text);
   font-family: -apple-system, "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei",
@@ -68,7 +96,8 @@ select {
 }
 
 input::placeholder {
-  color: #a9bab3;
+  color: var(--muted);
+  opacity: 0.75;
 }
 
 input:focus,
@@ -93,7 +122,7 @@ select:focus {
 .tabbar {
   display: flex;
   border-top: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.96);
+  background: var(--tabbar-bg);
   backdrop-filter: blur(8px);
   padding-bottom: var(--safe-bottom);
 }
@@ -855,6 +884,25 @@ select:focus {
   gap: 10px;
 }
 
+/* 标题行：「译」按钮挂在标题右侧 */
+.reader-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 10px 0 4px;
+}
+
+.reader-title-row .reader-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+/* 标题译文（点标题旁的「译」才出现） */
+.title-trans {
+  margin-bottom: 10px;
+}
+
 .reader-title {
   margin: 10px 0 4px;
 }
@@ -1003,6 +1051,29 @@ select:focus {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.sheet-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 词卡里的图标按钮（目前是「加入单词本」） */
+.icon-btn {
+  font-size: 21px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 10px;
+  color: var(--muted);
+}
+
+.icon-btn.on {
+  color: var(--accent);
+}
+
+.icon-btn:disabled {
+  opacity: 0.5;
 }
 
 .sheet-word {

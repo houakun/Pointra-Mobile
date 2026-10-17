@@ -110,6 +110,9 @@ export default function ReaderPage({ accent, onToast, onChanged }: Props) {
   /** 段落下标 → 是否展开显示译文 */
   const [shown, setShown] = useState<Record<number, boolean>>({});
   const [translating, setTranslating] = useState<number | null>(null);
+  /** 文章标题的译文（点标题旁的「译」才请求） */
+  const [titleTrans, setTitleTrans] = useState<string | null>(null);
+  const [titleTranslating, setTitleTranslating] = useState(false);
 
   // 词卡
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -154,6 +157,8 @@ export default function ReaderPage({ accent, onToast, onChanged }: Props) {
         setTranslations({});
         setShown({});
         setTranslating(null);
+        setTitleTrans(null);
+        setTitleTranslating(false);
         setSheetOpen(false);
         setLookup(null);
       } catch (e) {
@@ -164,14 +169,16 @@ export default function ReaderPage({ accent, onToast, onChanged }: Props) {
   );
 
   const openWord = useCallback(
-    async (word: string, sentence: string) => {
+    // 只传单词：不再为每个词请求它在文中的那句话译文
+    // （词卡里那块「文中」已经按要求去掉了，少一次网络往返）
+    async (word: string) => {
       const seq = ++lookupSeq.current;
       setSheetOpen(true);
       setSheetLoading(true);
       setSheetError(null);
       setLookup(null);
       try {
-        const result = await api.lookupWord(word, sentence);
+        const result = await api.lookupWord(word, null);
         if (seq !== lookupSeq.current) return;
         setLookup(result);
       } catch (e) {
@@ -307,6 +314,28 @@ export default function ReaderPage({ accent, onToast, onChanged }: Props) {
     });
   }, [visible]);
 
+  /**
+   * 标题旁的「译」：只翻标题。
+   *
+   * 不进段落译文缓存（标题很短、也不会重复出现），收起只是把本地状态置空。
+   */
+  const toggleTitleTranslation = useCallback(async () => {
+    if (!article) return;
+    if (titleTrans) {
+      setTitleTrans(null);
+      return;
+    }
+    setTitleTranslating(true);
+    try {
+      const result = await api.translateParagraph(article.title);
+      setTitleTrans(result.trans);
+    } catch (e) {
+      onToast(String(e));
+    } finally {
+      setTitleTranslating(false);
+    }
+  }, [article, titleTrans, onToast]);
+
   const keywords = useMemo(
     () => new Set((article?.keywords ?? []).map((k) => k.toLowerCase())),
     [article],
@@ -324,7 +353,17 @@ export default function ReaderPage({ accent, onToast, onChanged }: Props) {
           <span className="muted">点单词查词 · 点「译」出译文</span>
         </div>
 
-        <div className="h1 reader-title">{article.title}</div>
+        <div className="reader-title-row">
+          <div className="h1 reader-title">{article.title}</div>
+          <button
+            className="para-btn"
+            disabled={titleTranslating}
+            onClick={() => void toggleTitleTranslation()}
+          >
+            {titleTranslating ? "…" : titleTrans ? "收起" : "译"}
+          </button>
+        </div>
+        {titleTrans && <div className="para-trans title-trans">{titleTrans}</div>}
         {article.origin && (
           <div className="muted reader-origin">{article.origin}</div>
         )}
@@ -344,7 +383,7 @@ export default function ReaderPage({ accent, onToast, onChanged }: Props) {
               shown={Boolean(shown[index])}
               translating={translating === index}
               onToggle={() => void toggleTranslation(index, text)}
-              onWord={(word, sentence) => void openWord(word, sentence)}
+              onWord={(word) => void openWord(word)}
             />
           ))}
         </div>

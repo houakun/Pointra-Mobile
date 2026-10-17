@@ -32,6 +32,8 @@ export default function WordSheet({
   onAdded,
 }: Props) {
   const [saving, setSaving] = useState(false);
+  /** 本次会话里是否已收藏（图标变实心） */
+  const [added, setAdded] = useState(false);
 
   const play = (which: Accent) => {
     if (!lookup) return;
@@ -50,6 +52,7 @@ export default function WordSheet({
           ? `「${result.word}」已在单词本里，已刷新词义`
           : `已加入单词本：${result.word}`,
       );
+      setAdded(true);
       onAdded();
     } catch (e) {
       onToast(`加入失败：${e}`);
@@ -84,9 +87,21 @@ export default function WordSheet({
           <div className="sheet-body">
             <div className="sheet-head">
               <div className="sheet-word">{lookup.word}</div>
-              <button className="btn ghost small" onClick={onClose} aria-label="关闭">
-                ✕
-              </button>
+              <div className="sheet-actions">
+                {/* 收藏做成图标：词卡内容已经够长，不必再占一整行 */}
+                <button
+                  className={`icon-btn${added ? " on" : ""}`}
+                  onClick={() => void add()}
+                  disabled={saving}
+                  aria-label="加入单词本"
+                  title="加入单词本"
+                >
+                  {added ? "★" : "☆"}
+                </button>
+                <button className="btn ghost small" onClick={onClose} aria-label="关闭">
+                  ✕
+                </button>
+              </div>
             </div>
 
             {(lookup.phonetic_uk || lookup.phonetic_us) && (
@@ -124,19 +139,6 @@ export default function WordSheet({
               )}
             </div>
 
-            {(lookup.sentence || lookup.sentence_trans || lookup.sentence_error) && (
-              <div className="detail-card">
-                <div className="detail-card-title">文中</div>
-                {lookup.sentence && <div className="sheet-sentence">{lookup.sentence}</div>}
-                {lookup.sentence_trans && (
-                  <div className="sheet-trans">{lookup.sentence_trans}</div>
-                )}
-                {lookup.sentence_error && (
-                  <div className="sheet-hint">句中译文没取到：{lookup.sentence_error}</div>
-                )}
-              </div>
-            )}
-
             {exchange.length > 0 && (
               <div className="detail-card">
                 <div className="detail-card-title">词形变化</div>
@@ -148,10 +150,6 @@ export default function WordSheet({
                 ))}
               </div>
             )}
-
-            <button className="btn primary wide" onClick={add} disabled={saving}>
-              {saving ? "加入中…" : "＋ 加入单词本"}
-            </button>
 
             {lookup.cached && <div className="sheet-hint">（释义来自本机缓存）</div>}
           </div>

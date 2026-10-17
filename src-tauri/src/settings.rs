@@ -1,4 +1,4 @@
-//! 手机端本地设置：配对信息 / 每日上限 / 发音偏好。
+//! 手机端本地设置：配对信息 / 每日上限 / 发音偏好 / 主题。
 //!
 //! 单独存成 `settings.json`（而不是塞进某个大配置），
 //! 避免「改一个字段把别的字段打回默认值」。
@@ -12,6 +12,11 @@ fn default_accent() -> String {
     "us".to_string()
 }
 
+/// 主题默认跟随系统（`system` / `light` / `dark`）
+fn default_theme() -> String {
+    "system".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
@@ -21,6 +26,9 @@ pub struct Settings {
     /// 发音偏好：`us` / `uk`
     #[serde(default = "default_accent")]
     pub audio_accent: String,
+    /// 主题：`system`（跟随系统）/ `light` / `dark`
+    #[serde(default = "default_theme")]
+    pub theme: String,
     /// 上次同步完成时间（毫秒）
     #[serde(default)]
     pub last_sync_at: Option<i64>,
@@ -32,6 +40,7 @@ impl Default for Settings {
             pairing: None,
             goals: DailyGoals::default(),
             audio_accent: default_accent(),
+            theme: default_theme(),
             last_sync_at: None,
         }
     }
