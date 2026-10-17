@@ -104,6 +104,9 @@ export const api = {
     invoke<ParagraphTranslation>("translate_paragraph", { text }),
   /** 加入本机单词本（本机 id/seq 与 PC 下发的隔开，见 Rust 侧注释） */
   addLocalWord: (word: string) => invoke<LocalWordAdd>("add_local_word", { word }),
+
+  /** 当前 App 版本（Rust 侧读编译进二进制的包版本，不走 ACL） */
+  appVersion: () => invoke<string>("app_version"),
 };
 
 /** 有道在线发音 URL（R3）。Android 端只用 HTML5 audio 播放，不移植 rodio。 */

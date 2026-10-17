@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "../api";
 import type { Accent, Settings, SyncProgress, Theme, UpdateInfo, UpdateProgress } from "../types";
@@ -16,8 +15,13 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
   const [deviceName, setDeviceName] = useState("Android");
   const [busy, setBusy] = useState<string | null>(null);
   const [progress, setProgress] = useState<SyncProgress | null>(null);
-  /** 版本号取自构建时注入的 tauri.conf.json，取不到就退回静态值（权限缺失也不会白屏） */
-  const [version, setVersion] = useState("0.2.0");
+  /**
+   * 版本号：走**自己的** Rust 命令读编译进二进制的包版本。
+   *
+   * 之前用 `getVersion()`（`@tauri-apps/api/app`）会因 ACL 被拦而静默失败，
+   * 界面就退回到写死的旧号（表现得就是「版本号不对」）。
+   */
+  const [version, setVersion] = useState("");
   /** 自更新：检查/下载走 Rust 命令，最后一步用 JNI 拉系统安装器 */
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [checking, setChecking] = useState(false);
@@ -27,7 +31,8 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
   const [installError, setInstallError] = useState<string | null>(null);
 
   useEffect(() => {
-    getVersion()
+    api
+      .appVersion()
       .then(setVersion)
       .catch(() => undefined);
   }, []);
@@ -276,7 +281,7 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
       <div className="card">
         <div className="row between">
           <strong>应用更新</strong>
-          <span className="muted">当前 v{version}</span>
+          <span className="muted">{version ? `当前 v${version}` : "当前版本未知"}</span>
         </div>
 
         {update && (
@@ -391,7 +396,7 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
       </div>
 
       <div className="muted" style={{ textAlign: "center", padding: "4px 0 20px" }}>
-        Pointra Mobile v{version}
+        {version ? `Pointra Mobile v${version}` : "Pointra Mobile"}
       </div>
     </div>
   );

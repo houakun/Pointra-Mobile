@@ -646,6 +646,16 @@ pub async fn add_local_word(
     blocking(db, move |conn| db::add_local_word(conn, &word, &entry)).await
 }
 
+/// 当前 App 版本（编译进二进制的包版本，来自 `tauri.conf.json`）。
+///
+/// 前端原本调 `@tauri-apps/api/app` 的 `getVersion()`，但那条路要过 ACL 权限，
+/// 而一旦被拦就只能静默失败 —— 界面会退回到写死的旧版本号，
+/// 看起来就是「版本号不对」。自己暴露一个命令最稳，也绕不过去。
+#[tauri::command]
+pub fn app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
 // ---------------------------------------------------------------------------
 // 学习
 // ---------------------------------------------------------------------------
@@ -1168,6 +1178,7 @@ pub fn run() {
             lookup_word,
             translate_paragraph,
             add_local_word,
+            app_version,
             get_card,
             build_queue,
             get_progress,
