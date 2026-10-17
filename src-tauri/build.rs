@@ -14,6 +14,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
+    // 这两个文件是**编译期嵌入**的（App context 由本脚本生成到 OUT_DIR，
+    // `generate_context!()` 读的就是它）。不声明 rerun-if-changed 的话，
+    // cargo 不会重跑本脚本 —— 表现就是「改了版本号，APK 的 versionName 变了，
+    // 但 App 里读到的还是旧版本」（踩过：设置页一直显示 0.3.2）。
+    println!("cargo:rerun-if-changed=tauri.conf.json");
+    println!("cargo:rerun-if-changed=capabilities/default.json");
+
     tauri_build::build();
 
     let assets: PathBuf = Path::new("assets/articles").to_path_buf();

@@ -646,14 +646,18 @@ pub async fn add_local_word(
     blocking(db, move |conn| db::add_local_word(conn, &word, &entry)).await
 }
 
-/// 当前 App 版本（编译进二进制的包版本，来自 `tauri.conf.json`）。
+/// 当前 App 版本。
 ///
-/// 前端原本调 `@tauri-apps/api/app` 的 `getVersion()`，但那条路要过 ACL 权限，
-/// 而一旦被拦就只能静默失败 —— 界面会退回到写死的旧版本号，
-/// 看起来就是「版本号不对」。自己暴露一个命令最稳，也绕不过去。
+/// 用 Cargo 包版本（`Cargo.toml`）而**不是** `tauri.conf.json` 的编译期 context：
+/// 后者由 build script 生成到 OUT_DIR，一旦 cargo 没重跑 build script，
+/// 版本号就会被缓存住（踩过：APK 的 versionName 已经是 0.4.0，
+/// 但 App 里读到的还是 0.3.2）。Cargo 包版本是 cargo 自己管的，
+/// 改 `Cargo.toml` 必然重编本 crate，缓存不住。
+///
+/// 约定：发版时 `Cargo.toml` 与 `tauri.conf.json` 的 version 一起改。
 #[tauri::command]
-pub fn app_version(app: AppHandle) -> String {
-    app.package_info().version.to_string()
+pub fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
 }
 
 // ---------------------------------------------------------------------------

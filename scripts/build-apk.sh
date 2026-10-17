@@ -60,8 +60,21 @@ echo "==> 2/3 交叉编译 Rust（$PROFILE；符号链接步骤会失败，属�
 # 依赖变化（实测改完 tauri.conf.json 后不重编，App 里跑的还是旧配置，
 # 表现为启动 panic「unknown field ...」）。这里显式动一下 lib.rs 强制重编。
 touch src-tauri/src/lib.rs
-# 空数组在 set -u 下的安全展开写法
-npx tauri android build ${TAURI_MODE[@]+"${TAURI_MODE[@]}"} --target "$ABI" --apk || true
+# 空数组在 set -u 下的安全展开写法。
+#
+# `|| true` 是为了容忍最后「创建符号链接」那步失败（Windows 无权限，属预期），
+# 但它同样会吞掉**真正的编译失败** —— 那样脚本会继续拿旧的 .so 打包，
+# 产出「versionName 是新版、跑的却是旧代码」的假包（实测踩过：
+# reqwest 的 TLS feature 名写错，cargo 一直报错，APK 却照旧打包成功）。
+# 所以这里显式检查一次，编译失败就停下。
+RUST_LOG_FILE="$(mktemp)"
+npx tauri android build ${TAURI_MODE[@]+"${TAURI_MODE[@]}"} --target "$ABI" --apk 2>&1 | tee "$RUST_LOG_FILE" || true
+if grep -qE 'error(\[|:)|exited with code 101' "$RUST_LOG_FILE"; then
+  rm -f "$RUST_LOG_FILE"
+  echo "Rust 编译失败（见上面的 error）——已停下，避免拿旧的 .so 打出假包。" >&2
+  exit 1
+fi
+rm -f "$RUST_LOG_FILE"
 
 SO="$CARGO_TARGET_DIR/$ABI-linux-android/$PROFILE/libpointra_mobile.so"
 if [[ ! -f "$SO" ]]; then
