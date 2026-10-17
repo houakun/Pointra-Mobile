@@ -105,7 +105,10 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
       const info = await api.checkUpdate();
       setUpdate(info);
       if (!info) onToast("电脑端还没放新版本包");
-      else if (!info.newer) onToast(`已是最新版本（电脑端 v${info.version}）`);
+      else if (!info.newer)
+        onToast(
+          `已是最新版本（v${info.version}${info.source === "online" ? "，来自网络" : "，来自电脑"}）`,
+        );
     } catch (e) {
       onToast(`${e}`);
     } finally {
@@ -285,10 +288,21 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
         </div>
 
         {update && (
-          <div className="muted" style={{ marginTop: 8 }}>
-            {update.newer
-              ? `发现新版本 v${update.version}（${(update.size / 1048576).toFixed(1)} MB）`
-              : `电脑端版本 v${update.version}，已是最新`}
+          <div style={{ marginTop: 8 }}>
+            <div className="muted">
+              {update.newer
+                ? `发现新版本 v${update.version}（${(update.size / 1048576).toFixed(1)} MB）`
+                : `最新版本 v${update.version}，已是最新`}
+              {update.source === "online"
+                ? " · 来自网络"
+                : update.source === "pc"
+                  ? " · 来自电脑"
+                  : ""}
+            </div>
+            {/* 更新说明：发布时写进元数据的 notes，直接摊给用户看 */}
+            {update.newer && update.notes && (
+              <div className="update-notes">{update.notes}</div>
+            )}
           </div>
         )}
 

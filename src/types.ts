@@ -110,14 +110,18 @@ export interface SyncProgress {
 
 export type StateFilter = "all" | "new" | "learning" | "review" | "mastered";
 
-/** 电脑端发布的新版本信息（`GET /api/app/latest`） */
+/** 电脑端 / 网络发布的新版本信息（`GET /api/app/latest` 或 GitHub Releases） */
 export interface UpdateInfo {
   version: string;
   version_code: number;
   size: number;
   sha256: string;
+  /** 这个版本改了什么（发布时写进元数据） */
+  notes: string | null;
   /** 远端版本是否高于本机 */
   newer: boolean;
+  /** 这份信息来自哪里：`online` = 网络（GitHub），`pc` = 电脑端 */
+  source: string;
 }
 
 /** 下载进度事件 `update://progress` 的载荷 */

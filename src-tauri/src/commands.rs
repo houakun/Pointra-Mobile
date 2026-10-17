@@ -957,8 +957,21 @@ mod tests {
 }
 
 // ---------------------------------------------------------------------------
-// 手机端自更新（A 方案：新版本从 PC 端同步服务拉）
+// 手机端自更新
+//
+// 两个来源，**默认先试公网**（不依赖电脑开机/配对），失败再回落电脑端：
+// - 公网：GitHub Releases 的 `latest` 固定地址（发布时把 pointra.json / pointra.apk 传成附件）；
+// - 电脑端：局域网同步服务的 /api/app/latest（内网更快，但要求电脑开着且已配对）。
 // ---------------------------------------------------------------------------
+
+/// 公网更新源：GitHub Releases 的固定地址（`latest` 永远指向最新 release）。
+///
+/// 只要每次发布把这两个文件作为 release 附件上传，就不需要客户端改代码。
+/// 注：国内网络访问 GitHub 可能不稳，所以电脑端通道保留着当备选。
+const ONLINE_META_URL: &str =
+    "https://github.com/houakun/Pointra-Mobile/releases/latest/download/pointra.json";
+const ONLINE_APK_URL: &str =
+    "https://github.com/houakun/Pointra-Mobile/releases/latest/download/pointra.apk";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateInfo {
@@ -966,11 +979,18 @@ pub struct UpdateInfo {
     pub version_code: i64,
     pub size: u64,
     pub sha256: String,
-    /// 远端版本是否高于本机（false = 电脑端放的是同版本或更旧）。
+    /// 这个版本改了什么（发布时写进元数据，手机端直接展示给用户）。
+    /// 服务端可能没写，所以 `default`。
+    #[serde(default)]
+    pub notes: Option<String>,
+    /// 远端版本是否高于本机（false = 放的是同版本或更旧）。
     /// **服务端不下发这个字段**，由客户端算，所以必须 `default`，
     /// 否则反序列化会报 “missing field `newer`”。
     #[serde(default)]
     pub newer: bool,
+    /// 这份信息来自哪里：`online`（GitHub）/ `pc`（电脑端）。客户端自己填。
+    #[serde(default)]
+    pub source: String,
 }
 
 /// 把 `x.y.z` 拆成可比较的数字（缺段/非数字按 0，不 panic）。
@@ -983,15 +1003,48 @@ fn parse_version(v: &str) -> (u64, u64, u64) {
     )
 }
 
+/// 带 UA 的客户端：GitHub 的接口/附件会拒绝没有 User-Agent 的请求。
+fn update_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .user_agent("Pointra-Mobile/uptate-check")
+        .build()
+        .map_err(|e| format!("创建网络客户端失败：{e}"))
+}
+
+/// 公网源查版本（GitHub Releases）。`Ok(None)` = 还没发布过 release。
+async fn check_update_online(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
+    let resp = update_client()?
+        .get(ONLINE_META_URL)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("连不上更新服务器：{e}"))?;
+
+    // 404 = 仓库还没发过 release，或附件名不对（不算错误，直接回落电脑端）
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !resp.status().is_success() {
+        return Err(format!("更新服务器返回 {}", resp.status()));
+    }
+
+    let mut info: UpdateInfo = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析版本信息失败：{e}"))?;
+    info.newer = parse_version(&info.version) > parse_version(&app.package_info().version.to_string());
+    info.source = "online".to_string();
+    Ok(Some(info))
+}
+
 /// 问电脑端有没有新版本。`Ok(None)` = 电脑端还没发布（http 404）。
-#[tauri::command]
-pub async fn check_update(
-    app: AppHandle,
-    state: State<'_, AppState>,
+async fn check_update_via_pc(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
 ) -> Result<Option<UpdateInfo>, String> {
-    let (base, _) = current_pairing(&state)?;
+    let (base, _) = current_pairing(state)?;
     let url = format!("{}/api/app/latest", base.trim_end_matches('/'));
-    let resp = reqwest::Client::new()
+    let resp = update_client()?
         .get(&url)
         .timeout(std::time::Duration::from_secs(8))
         .send()
@@ -1010,25 +1063,51 @@ pub async fn check_update(
         .map_err(|e| format!("解析版本信息失败：{e}"))?;
     let local = app.package_info().version.to_string();
     info.newer = parse_version(&info.version) > parse_version(&local);
+    info.source = "pc".to_string();
     Ok(Some(info))
 }
 
-/// 下载 APK 到应用缓存目录（该目录已被 manifest 里的 FileProvider 暴露），
-/// 返回本地路径——由前端再交给系统安装器。
+/// 查新版本：**先公网（不依赖电脑），再电脑端（内网更快）**。
 #[tauri::command]
-pub async fn download_update(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
+pub async fn check_update(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<UpdateInfo>, String> {
+    let online = check_update_online(&app).await;
+    match &online {
+        // 公网已经有结论（有新版/同版本）就直接用
+        Ok(Some(_)) => return online,
+        // 公网没发过 release → 回落电脑端
+        Ok(None) => {}
+        // 公网失败（没网 / GitHub 不通）→ 回落电脑端，两边都记下来
+        Err(_) => {}
+    }
+
+    let via_pc = check_update_via_pc(&app, &state).await;
+    match (online, via_pc) {
+        (_, Ok(Some(info))) => Ok(Some(info)),
+        (_, Ok(None)) => Ok(None),
+        // 电脑端也失败：把公网的失败原因一起报出来，方便判断是「没网」还是「没发布」
+        (Err(online_err), Err(pc_err)) => Err(format!("更新检查失败：{online_err}；电脑端：{pc_err}")),
+        (_, Err(pc_err)) => Err(pc_err),
+    }
+}
+
+/// 从 `url` 流式下载 APK 到缓存目录，边下边发进度事件。
+///
+/// `who` 只用于错误提示（“更新服务器”/“电脑端”），便于用户判断是网络还是电脑的问题。
+async fn download_apk_from(app: &AppHandle, url: &str, who: &str) -> Result<String, String> {
     use futures_util::StreamExt;
     use std::io::Write;
 
-    let (base, _) = current_pairing(&state)?;
-    let url = format!("{}/api/app/download", base.trim_end_matches('/'));
-    let resp = reqwest::Client::new()
-        .get(&url)
+    let resp = update_client()?
+        .get(url)
+        .timeout(std::time::Duration::from_secs(600))
         .send()
         .await
-        .map_err(|e| format!("下载失败：{e}"))?;
+        .map_err(|e| format!("{who}下载失败：{e}"))?;
     if !resp.status().is_success() {
-        return Err(format!("电脑端返回 {}", resp.status()));
+        return Err(format!("{who}返回 {}", resp.status()));
     }
     let total = resp.content_length().unwrap_or(0);
 
@@ -1054,6 +1133,27 @@ pub async fn download_update(app: AppHandle, state: State<'_, AppState>) -> Resu
     }
     file.flush().map_err(|e| format!("写入失败：{e}"))?;
     Ok(dest.to_string_lossy().to_string())
+}
+
+/// 下载 APK 到应用缓存目录（该目录已被 manifest 里的 FileProvider 暴露），
+/// 返回本地路径——由前端再交给系统安装器。
+///
+/// 与 `check_update` 一致：**先公网，失败再回落电脑端**。
+#[tauri::command]
+pub async fn download_update(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
+    match download_apk_from(&app, ONLINE_APK_URL, "更新服务器").await {
+        Ok(path) => Ok(path),
+        Err(online_err) => {
+            // 公网不行（没网 / GitHub 不通 / 还没上传附件）→ 试电脑端
+            let Ok((base, _)) = current_pairing(&state) else {
+                return Err(online_err);
+            };
+            let url = format!("{}/api/app/download", base.trim_end_matches('/'));
+            download_apk_from(&app, &url, "电脑端")
+                .await
+                .map_err(|pc_err| format!("{online_err}；电脑端：{pc_err}"))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

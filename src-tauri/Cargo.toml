@@ -1,6 +1,6 @@
 [package]
 name = "pointra_mobile"
-version = "0.3.3"
+version = "0.4.0"
 edition = "2021"
 description = "Pointra Mobile — Android 端数据层、简化 SM-2 与局域网同步客户端"
 
@@ -17,9 +17,11 @@ tauri = { version = "2", features = [] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# 局域网同步走明文 HTTP，不需要 TLS 后端；
-# 这样也避开了 aws-lc-rs / openssl 在 Android 上的交叉编译麻烦
-reqwest = { version = "0.13", default-features = false, features = ["json", "stream"] }
+# 局域网同步走明文 HTTP，本来不需要 TLS；
+# 但「不依赖电脑端的在线更新」要访问 GitHub Releases（只有 https），
+# 所以后端选了 rustls（纯 Rust，不需要 openssl/NDK 额外配置）。
+# 代价：release 包大约增加 1MB。
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net"] }
 # WebSocket 客户端（明文 ws://，默认特性即可）
 tokio-tungstenite = "0.26"

@@ -928,6 +928,19 @@ select:focus {
   margin-top: 2px;
 }
 
+/* 更新说明：保留发布时写的换行（white-space: pre-wrap） */
+.update-notes {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
 /* 真题出处（「2025 年 12 月英语四级真题 · 第 1 套…」）：弱化但可见 */
 .reader-origin {
   margin: -4px 0 10px;
