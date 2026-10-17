@@ -1,6 +1,6 @@
 [package]
 name = "pointra_mobile"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 description = "Pointra Mobile — Android 端数据层、简化 SM-2 与局域网同步客户端"
 
