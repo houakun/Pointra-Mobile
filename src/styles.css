@@ -1157,3 +1157,51 @@ select:focus {
 .tabbar .icon {
   font-size: 17px;
 }
+
+/* ---------------------------------------------------------------------------
+   阅读页：选中句子后的操作条（翻译 / 加入句子本）
+   与系统的「复制/分享」菜单共存，所以固定在底部、不抢焦点。
+   --------------------------------------------------------------------------- */
+
+.pick-bar {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: calc(12px + var(--safe-bottom));
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+
+/* 选中的内容多时内部滚动，不要把整屏顶掉 */
+.pick-body {
+  max-height: 28vh;
+  overflow-y: auto;
+}
+
+.pick-text {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.pick-trans {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--accent-2);
+}
+
+.pick-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

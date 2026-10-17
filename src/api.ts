@@ -5,6 +5,7 @@ import type {
   BrowsePage,
   CardDetail,
   CardKind,
+  LocalSentenceAdd,
   LocalWordAdd,
   Overview,
   ParagraphTranslation,
@@ -107,6 +108,10 @@ export const api = {
 
   /** 当前 App 版本（Rust 侧读编译进二进制的包版本，不走 ACL） */
   appVersion: () => invoke<string>("app_version"),
+
+  /** 把阅读页选中的句子加进本机句子本（译文可选，不依赖电脑端） */
+  addLocalSentence: (text: string, trans: string | null) =>
+    invoke<LocalSentenceAdd>("add_local_sentence", { text, trans }),
 };
 
 /** 有道在线发音 URL（R3）。Android 端只用 HTML5 audio 播放，不移植 rodio。 */

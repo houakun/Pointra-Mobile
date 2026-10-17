@@ -197,6 +197,14 @@ export interface ParagraphTranslation {
   cached: boolean;
 }
 
+/** `add_local_sentence` 的结果（阅读页选中句子后加入句子本） */
+export interface LocalSentenceAdd {
+  id: string;
+  text: string;
+  /** `true` = 这句本机已经收藏过（这次只刷新了译文） */
+  existed: boolean;
+}
+
 /** `add_local_word` 的结果 */
 export interface LocalWordAdd {
   id: string;

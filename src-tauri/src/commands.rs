@@ -646,6 +646,23 @@ pub async fn add_local_word(
     blocking(db, move |conn| db::add_local_word(conn, &word, &entry)).await
 }
 
+/// 把阅读页**选中的句子**加进本机句子本（译文可选）。
+///
+/// 与 `add_local_word` 同一套隔离策略（本机 id 前缀 + 负 seq），
+/// 不依赖电脑端，也不影响 PC 下发的记录。
+#[tauri::command]
+pub async fn add_local_sentence(
+    state: State<'_, AppState>,
+    text: String,
+    trans: Option<String>,
+) -> Result<db::LocalSentenceAdd, String> {
+    let db = state.db.clone();
+    blocking(db, move |conn| {
+        db::add_local_sentence(conn, &text, trans.as_deref())
+    })
+    .await
+}
+
 /// 当前 App 版本。
 ///
 /// 用 Cargo 包版本（`Cargo.toml`）而**不是** `tauri.conf.json` 的编译期 context：
@@ -1013,6 +1030,8 @@ fn parse_version(v: &str) -> (u64, u64, u64) {
 /// 后者需要运行时显式初始化，一旦没初始化，第一次 HTTPS 请求就会在 tokio 工作线程上
 /// panic（实测：界面无限转圈、连超时都兜不住）。
 fn update_client() -> Result<reqwest::Client, String> {
+    // 构建 Client 前必须先装好全局 crypto provider（见 dict.rs 的 ensure_crypto_provider）
+    crate::dict::ensure_crypto_provider();
     let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
     let roots = rustls::RootCertStore {
         roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
@@ -1042,7 +1061,8 @@ where
     F: std::future::Future<Output = Result<T, String>>,
 {
     match tokio::time::timeout(std::time::Duration::from_secs(secs), fut).await {
-        Ok(result) => result,        Err(_) => Err(format!("{what}超时（{secs} 秒）")),
+        Ok(result) => result,
+        Err(_) => Err(format!("{what}超时（{secs} 秒）")),
     }
 }
 
@@ -1291,6 +1311,10 @@ pub async fn install_update(path: String) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 pub fn run() {
+    // rustls 的 crypto provider 必须在使用**任何** reqwest Client 之前全局装好
+    //（单测路径由 dict::ensure_crypto_provider 懒安装，见那里注释）。
+    crate::dict::ensure_crypto_provider();
+
     tauri::Builder::default()
         .setup(|app| {
             let dir = app
@@ -1331,6 +1355,7 @@ pub fn run() {
             lookup_word,
             translate_paragraph,
             add_local_word,
+            add_local_sentence,
             app_version,
             get_card,
             build_queue,

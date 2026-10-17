@@ -63,7 +63,21 @@ impl WordLookup {
     }
 }
 
+/// 全局安装 rustls 的 crypto provider（只装一次）。
+///
+/// Cargo.toml 用了 `rustls-no-provider`（为避开 Android 平台证书验证器的坑），
+/// 这样 reqwest 在**构建任何 Client** 时都要求已全局装好 provider，
+/// 否则直接 panic：「No rustls crypto provider is configured」。
+/// 放在这里懒安装、而不是只在 App 启动时装：单测路径不经过 Tauri 的 `run()`。
+pub(crate) fn ensure_crypto_provider() {
+    static ONCE: OnceLock<()> = OnceLock::new();
+    ONCE.get_or_init(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 fn shared_client() -> Result<&'static reqwest::Client, String> {
+    ensure_crypto_provider();
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     if let Some(client) = CLIENT.get() {
         return Ok(client);

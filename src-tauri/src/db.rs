@@ -794,6 +794,69 @@ pub fn has_local_word(conn: &Connection, word: &str) -> Result<bool, String> {
         .map_err(|e| format!("查询单词失败: {e}"))
 }
 
+// --- 本机收藏句子（阅读页选中后「加入句子本」）--------------------------
+
+/// 本机收藏的句子 id：`mobile-s-` 前缀 + 文本哈希。
+///
+/// 与 PC 下发的 id（sha1）完全隔离，理由同 `local_word_id`：
+/// PC 是同步数据源，本机写入的句子不能和它的主键空间撞上。
+pub fn local_sentence_id(text: &str) -> String {
+    format!("mobile-s-{:016x}", crate::dict::fnv1a_64(text.trim()))
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalSentenceAdd {
+    pub id: String,
+    pub text: String,
+    /// `true` = 这句本机已经收藏过（这次只刷新了译文）
+    pub existed: bool,
+}
+
+/// 把阅读页选中的句子写进本机句子本，立即可复习。
+///
+/// `trans` 可以没有（用户没先翻译就收藏）：此时保留库里原有的译文，
+/// 不会被空值覆盖（SQL 里用 COALESCE）。
+pub fn add_local_sentence(
+    conn: &Connection,
+    text: &str,
+    trans: Option<&str>,
+) -> Result<LocalSentenceAdd, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("句子为空".to_string());
+    }
+    let id = local_sentence_id(text);
+    let existed = conn
+        .query_row("SELECT 1 FROM sentences WHERE id = ?1", params![id], |_| {
+            Ok(())
+        })
+        .optional()
+        .map_err(|e| format!("查询句子失败: {e}"))?
+        .is_some();
+
+    // 同样：ON CONFLICT 分支不含学习状态列，重复收藏不重置进度
+    conn.execute(
+        "INSERT INTO sentences (seq, id, text, trans, added_at, state) \
+         VALUES (?1, ?2, ?3, ?4, ?5, 0) \
+         ON CONFLICT(id) DO UPDATE SET text = excluded.text, \
+            trans = COALESCE(excluded.trans, sentences.trans)",
+        params![
+            local_word_seq(&id),
+            id,
+            text,
+            trans,
+            crate::settings::now_ms(),
+        ],
+    )
+    .map_err(|e| format!("加入句子本失败: {e}"))?;
+
+    Ok(LocalSentenceAdd {
+        id,
+        text: text.to_string(),
+        existed,
+    })
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LocalWordAdd {
     pub id: String,
@@ -1206,6 +1269,50 @@ mod tests {
             parse_exam_year("import-1760000000000"),
             (String::new(), None)
         );
+    }
+
+    /// 句子收藏：与词同一套隔离（本机 id + 负 seq），重复收藏只刷译文、不重置进度。
+    #[test]
+    fn local_sentence_is_isolated_and_keeps_progress() {
+        let conn = open_in_memory().unwrap();
+        let added = add_local_sentence(&conn, "  Hello world.  ", Some("你好，世界。")).unwrap();
+        assert!(added.id.starts_with("mobile-s-"), "id 要有本机前缀：{}", added.id);
+        assert!(!added.existed);
+        assert_eq!(added.text, "Hello world.", "文本要 trim");
+        assert_eq!(stats(&conn, NOW).unwrap().sentence_count, 1);
+
+        let seq: i64 = conn
+            .query_row(
+                "SELECT seq FROM sentences WHERE id = ?1",
+                params![added.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(seq < 0, "本机收藏的 seq 必须为负，实际 {seq}");
+
+        // 学一轮后再收藏（不带译文）：进度不动，已有译文也不能被空值覆盖
+        grade_card(&conn, "sentences", &added.id, Grade::Good, NOW, TZ).unwrap();
+        let learned = card_state_of(&conn, "sentences", &added.id).unwrap().unwrap();
+        let again = add_local_sentence(&conn, "Hello world.", None).unwrap();
+        assert!(again.existed);
+        assert_eq!(again.id, added.id);
+
+        let after = card_state_of(&conn, "sentences", &added.id).unwrap().unwrap();
+        assert_eq!(after.reps, learned.reps, "重复收藏不能重置进度");
+        assert_eq!(after.interval, learned.interval);
+        let trans: String = conn
+            .query_row(
+                "SELECT trans FROM sentences WHERE id = ?1",
+                params![added.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(trans, "你好，世界。", "空译文不能覆盖已有的");
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sentences", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "同一句只能有一条本机记录");
     }
 
     #[test]

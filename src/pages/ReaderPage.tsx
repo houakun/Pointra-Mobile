@@ -116,6 +116,12 @@ export default function ReaderPage({ accent, onToast, onChanged, active }: Props
   const [titleTrans, setTitleTrans] = useState<string | null>(null);
   const [titleTranslating, setTitleTranslating] = useState(false);
 
+  // --- 选中句子后的操作条（翻译 / 加入句子本）---
+  /** 当前选中的文本（空 = 没选中） */
+  const [picked, setPicked] = useState("");
+  const [pickTrans, setPickTrans] = useState<string | null>(null);
+  const [pickBusy, setPickBusy] = useState<"translate" | "save" | null>(null);
+
   // 词卡
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sheetLoading, setSheetLoading] = useState(false);
@@ -339,6 +345,90 @@ export default function ReaderPage({ accent, onToast, onChanged, active }: Props
     }
   }, [article, titleTrans, onToast]);
 
+  /**
+   * 监听 WebView 的文本选择：选中一句就在底部弹操作条。
+   *
+   * 只读取选区、**不拦系统菜单** —— 「复制 / 分享 / 网页搜索」继续可用。
+   * 过滤掉没空格的（单词，交给点词查词）和超长的（多半是整段误选）。
+   */
+  useEffect(() => {
+    if (!article) {
+      setPicked("");
+      return;
+    }
+    const onSelectionChange = () => {
+      const text = window.getSelection()?.toString().trim() ?? "";
+      if (!text || text.length > 300 || !text.includes(" ")) {
+        setPicked("");
+        return;
+      }
+      setPicked((prev) => (prev === text ? prev : text));
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => document.removeEventListener("selectionchange", onSelectionChange);
+  }, [article]);
+
+  // 选区一变，上一次的译文就作废
+  useEffect(() => {
+    setPickTrans(null);
+  }, [picked]);
+
+  const clearPick = useCallback(() => {
+    window.getSelection()?.removeAllRanges();
+    setPicked("");
+  }, []);
+
+  const translatePick = useCallback(async () => {
+    if (!picked) return;
+    setPickBusy("translate");
+    try {
+      const result = await api.translateParagraph(picked);
+      setPickTrans(result.trans);
+    } catch (e) {
+      onToast(String(e));
+    } finally {
+      setPickBusy(null);
+    }
+  }, [picked, onToast]);
+
+  const savePick = useCallback(async () => {
+    if (!picked) return;
+    setPickBusy("save");
+    try {
+      // 还没翻过就顺手翻一下再存：句子本里直接带译文更实用（翻译失败也允许只存原文）
+      let trans = pickTrans;
+      if (!trans) {
+        try {
+          trans = (await api.translateParagraph(picked)).trans;
+          setPickTrans(trans);
+        } catch {
+          /* 忽略：只存原文 */
+        }
+      }
+      const result = await api.addLocalSentence(picked, trans ?? null);
+      onToast(result.existed ? "这句已在句子本里，已刷新译文" : "已加入句子本");
+      onChanged();
+      clearPick();
+    } catch (e) {
+      onToast(`加入失败：${e}`);
+    } finally {
+      setPickBusy(null);
+    }
+  }, [picked, pickTrans, onToast, onChanged, clearPick]);
+
+  // 按钮文字写成函数而不是嵌套三元：oxlint 的 no-nested-ternary / readability 都把嵌套三元当问题
+  function titleButtonLabel(): string {
+    if (titleTranslating) return "…";
+    if (titleTrans) return "收起";
+    return "译";
+  }
+
+  function pickTranslateLabel(): string {
+    if (pickBusy === "translate") return "翻译中…";
+    if (pickTrans) return "重新翻译";
+    return "翻译";
+  }
+
   const keywords = useMemo(
     () => new Set((article?.keywords ?? []).map((k) => k.toLowerCase())),
     [article],
@@ -363,7 +453,7 @@ export default function ReaderPage({ accent, onToast, onChanged, active }: Props
             disabled={titleTranslating}
             onClick={() => void toggleTitleTranslation()}
           >
-            {titleTranslating ? "…" : titleTrans ? "收起" : "译"}
+            {titleButtonLabel()}
           </button>
         </div>
         {titleTrans && <div className="para-trans title-trans">{titleTrans}</div>}
@@ -390,6 +480,39 @@ export default function ReaderPage({ accent, onToast, onChanged, active }: Props
             />
           ))}
         </div>
+
+        {/* 选中句子后的操作条：翻译 / 加入句子本（与系统选择菜单共存） */}
+        {picked && (
+          <div className="pick-bar">
+            <div className="pick-body">
+              <div className="pick-text">{picked}</div>
+              {pickTrans && <div className="pick-trans">{pickTrans}</div>}
+            </div>
+            <div className="pick-actions">
+              <button
+                className="btn ghost small"
+                disabled={pickBusy !== null}
+                onClick={() => void translatePick()}
+              >
+                {pickTranslateLabel()}
+              </button>
+              <button
+                className="btn small"
+                disabled={pickBusy !== null}
+                onClick={() => void savePick()}
+              >
+                {pickBusy === "save" ? <span className="spinner" /> : "＋ 句子本"}
+              </button>
+              <button
+                className="btn ghost small"
+                onClick={clearPick}
+                aria-label="取消选择"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
 
         {sheetOpen && (
           <WordSheet
