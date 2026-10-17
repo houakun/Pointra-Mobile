@@ -99,10 +99,28 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
     }
   };
 
+  /**
+   * 给 Promise 套一层前端超时。
+   *
+   * Rust 侧的请求自己是有超时的，但实测在「TCP 能连上、HTTPS 没响应」的网络下
+   * 会一直不返回，界面上的按钮就无限转圈（用户只能杀进程）。
+   * 所以前端再兜一层：超时就提示，至少能恢复交互。
+   */
+  const withTimeout = <T,>(promise: Promise<T>, ms: number, what: string) =>
+    Promise.race([
+      promise,
+      new Promise<T>((_, reject) =>
+        window.setTimeout(
+          () => reject(new Error(`${what}超时（${ms / 1000} 秒），网络可能不通`)),
+          ms,
+        ),
+      ),
+    ]);
+
   const check = async () => {
     setChecking(true);
     try {
-      const info = await api.checkUpdate();
+      const info = await withTimeout(api.checkUpdate(), 20000, "检查更新");
       setUpdate(info);
       if (!info) onToast("电脑端还没放新版本包");
       else if (!info.newer)

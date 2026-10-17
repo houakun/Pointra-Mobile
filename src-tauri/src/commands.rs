@@ -1007,12 +1007,32 @@ fn parse_version(v: &str) -> (u64, u64, u64) {
     )
 }
 
-/// 带 UA 的客户端：GitHub 的接口/附件会拒绝没有 User-Agent 的请求。
+/// 带 UA 的客户端：GitHub 的接口/附件会拒绍没有 User-Agent 的请求。
+///
+/// 除了 reqwest 自带的超时，还显式设 `connect_timeout`：
+/// 某些网络下 TCP 能建上、但后续无响应，只靠请求级 timeout 会卡很久。
 fn update_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
-        .user_agent("Pointra-Mobile/uptate-check")
+        .user_agent("Pointra-Mobile/update-check")
+        .connect_timeout(std::time::Duration::from_secs(8))
+        .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| format!("创建网络客户端失败：{e}"))
+}
+
+/// 给一个 future 套硬超时。
+///
+/// 为什么不用 reqwest 自己的 `.timeout()` 就够了：实测（模拟器能连上 GitHub 的 TCP，
+/// 但 HTTPS 建立后无响应）请求会一直挂住，界面上的「检查更新」就无限转圈。
+/// 包一层 `tokio::time::timeout` 才能真的兜住。
+async fn with_deadline<T, F>(secs: u64, what: &str, fut: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    match tokio::time::timeout(std::time::Duration::from_secs(secs), fut).await {
+        Ok(result) => result,
+        Err(_) => Err(format!("{what}超时（{secs} 秒）")),
+    }
 }
 
 /// 公网源查版本（GitHub Releases）。`Ok(None)` = 还没发布过 release。
@@ -1078,7 +1098,8 @@ pub async fn check_update(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Option<UpdateInfo>, String> {
-    let online = check_update_online(&app).await;
+    // 公网检查甤 12 秒硬超时：超了就当公网不可用，回落电脑端
+    let online = with_deadline(12, "连更新服务器", check_update_online(&app)).await;
     match &online {
         // 公网已经有结论（有新版/同版本）就直接用
         Ok(Some(_)) => return online,
