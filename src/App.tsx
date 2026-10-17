@@ -196,21 +196,24 @@ export default function App() {
             syncHint={settings.pairing ? `同步：${settings.pairing.base}` : "未配对，去设置页配对"}
           />
         )}
-        {tab === "reader" && (
-          <ReaderPage accent={settings.audio_accent} onToast={showToast} onChanged={refresh} />
-        )}
+        {/* 阅读页用 display 控制显隐，而不是条件渲染：
+            切到别的 tab 再切回来时组件不会被卸载，
+            当前打开的文章、已展开的段落译文都还在（否则就回到列表了）。 */}
+        <div style={{ display: tab === "reader" ? undefined : "none" }}>
+          <ReaderPage
+            accent={settings.audio_accent}
+            active={tab === "reader"}
+            onToast={showToast}
+            onChanged={refresh}
+          />
+        </div>
         {tab === "vocab" && (
           <VocabPage
             onToast={showToast}
             onOpen={(id, kind) => setDetail({ id, kind })}
           />
         )}
-        {tab === "sentences" && (
-          <SentencesPage
-            onToast={showToast}
-            onOpen={(id, kind) => setDetail({ id, kind })}
-          />
-        )}
+        {tab === "sentences" && <SentencesPage onToast={showToast} />}
         {tab === "settings" && (
           <SettingsPage settings={settings} onChange={setSettings} onToast={showToast} />
         )}

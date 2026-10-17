@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, youdaoAudio } from "../api";
 import { EXCHANGE_LABEL } from "../labels";
 import type { Accent, WordLookup } from "../types";
@@ -32,8 +32,14 @@ export default function WordSheet({
   onAdded,
 }: Props) {
   const [saving, setSaving] = useState(false);
-  /** 本次会话里是否已收藏（图标变实心） */
+  /** 星标状态：由后端返回的「这个词是否已收藏」驱动 */
   const [added, setAdded] = useState(false);
+
+  // 每次拿到新词条都按后端的 `saved` 重新初始化：
+  // 只用组件内状态的话，关掉词卡再打开又会变回空心星（看起来像没收藏上）。
+  useEffect(() => {
+    setAdded(lookup?.saved ?? false);
+  }, [lookup]);
 
   const play = (which: Accent) => {
     if (!lookup) return;

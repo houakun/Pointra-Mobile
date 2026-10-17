@@ -503,6 +503,8 @@ pub struct WordLookupResult {
     pub sentence_trans: Option<String>,
     /// 句译文单独失败时的提示：此时词卡本身仍然可用，不应该整张卡报错
     pub sentence_error: Option<String>,
+    /// 该词是否已在本机单词本里（决定词卡星标是实心还是空心）
+    pub saved: bool,
     /// 词典数据是否来自本地缓存（断网时 cached=true 就是「读缓存仍可用」的证据）
     pub cached: bool,
 }
@@ -560,11 +562,17 @@ pub async fn lookup_word(
         }
     }
 
+    let saved = {
+        let word = word.clone();
+        blocking(db.clone(), move |conn| db::has_local_word(conn, &word)).await?
+    };
+
     Ok(WordLookupResult {
         entry,
         sentence,
         sentence_trans,
         sentence_error,
+        saved,
         cached: cached_hit,
     })
 }

@@ -1,21 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { BrowseItem, CardKind } from "../types";
+import type { BrowseItem } from "../types";
 
 const PAGE_SIZE = 40;
 
 interface Props {
   onToast: (msg: string) => void;
-  /** 点某条 → 打开句子详情页 */
-  onOpen: (id: string, kind: CardKind) => void;
 }
 
-export default function SentencesPage({ onToast, onOpen }: Props) {
+export default function SentencesPage({ onToast }: Props) {
   const [keyword, setKeyword] = useState("");
   const [items, setItems] = useState<BrowseItem[]>([]);
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
+  /** 展开译文的句子 id（一次只开一条，否则加载多了列表会被撑得很长） */
+  const [openId, setOpenId] = useState<string | null>(null);
   const reqId = useRef(0);
 
   const load = useCallback(
@@ -74,12 +74,17 @@ export default function SentencesPage({ onToast, onOpen }: Props) {
           <div className="list-item" key={it.id}>
             <div
               className="main tappable"
-              onClick={() => onOpen(it.id, "sentence")}
+              onClick={() => setOpenId(openId === it.id ? null : it.id)}
             >
-              {/* 列表只显示英文原句：译文点进详情页再看（搜索仍会匹配译文） */}
               <div className="title" style={{ whiteSpace: "normal" }}>
                 {it.text}
               </div>
+              {/* 译文就地展开，不再跳到一个新页面 */}
+              {openId === it.id && (
+                <div className="sub" style={{ whiteSpace: "normal" }}>
+                  {it.gloss || "（暂无译文）"}
+                </div>
+              )}
             </div>
             <button className="btn danger small" onClick={() => remove(it.id)}>
               删除

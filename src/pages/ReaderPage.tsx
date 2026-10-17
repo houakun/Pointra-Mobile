@@ -19,6 +19,8 @@ interface Props {
   onToast: (msg: string) => void;
   /** 收藏单词等会改变统计的操作，通知外层刷新（今日/词库数字） */
   onChanged: () => void;
+  /** 是否正当前台展示：切到别的 tab 时不要拦 Android 返回键（页面并没在展示） */
+  active: boolean;
 }
 
 interface Token {
@@ -100,7 +102,7 @@ export function splitBatch(raw: string): { title: string; body: string }[] {
     });
 }
 
-export default function ReaderPage({ accent, onToast, onChanged }: Props) {
+export default function ReaderPage({ accent, onToast, onChanged, active }: Props) {
   const [articles, setArticles] = useState<ArticleSummary[]>([]);
   const [listLoading, setListLoading] = useState(true);
 
@@ -143,9 +145,10 @@ export default function ReaderPage({ accent, onToast, onChanged }: Props) {
     void loadList();
   }, [loadList]);
 
-  // 阅读视图打开时，Android 返回键先回列表，而不是退出 App
+  // 阅读视图打开时，Android 返回键先回列表，而不是退出 App。
+  // 必须带上 `active`：切到别的 tab 时本页只是被 display 隐藏，不该再拦返回键。
   useBackGuard(
-    article !== null,
+    article !== null && active,
     useCallback(() => setArticle(null), []),
   );
 

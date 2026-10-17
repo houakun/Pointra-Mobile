@@ -1,7 +1,9 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- App 固定为浅色清新主题（不跟随系统深色）：
-         否则系统深色模式下会白底白字、状态栏图标也会看不见。 -->
-    <style name="Theme.pointra_mobile" parent="Theme.Material3.Light.NoActionBar">
+    <!-- 必须用 DayNight：WebView 的 `prefers-color-scheme` 跟随的是**App 的 Android 主题**，
+         固定成 Light 的话不管系统怎么切，App 内都读不到深色，
+         「跟随系统」这个主题选项就永远是失效的。
+         浅色模式的原生外观（背景/状态栏）在这里。 -->
+    <style name="Theme.pointra_mobile" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="android:windowBackground">#F7FBF9</item>
         <item name="android:statusBarColor">#E6F6EF</item>
         <item name="android:windowLightStatusBar">true</item>

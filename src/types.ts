@@ -182,6 +182,8 @@ export interface WordLookup {
   sentence_trans: string | null;
   /** 句中译文单独失败时的提示：词卡主体仍然可用 */
   sentence_error: string | null;
+  /** 该词是否已在本机单词本里（决定星标实心/空心） */
+  saved: boolean;
   /** 词典数据来自本地缓存（断网时 `true` 说明是读缓存） */
   cached: boolean;
 }

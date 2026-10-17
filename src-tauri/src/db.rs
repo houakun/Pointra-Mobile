@@ -782,6 +782,18 @@ fn local_word_seq(id: &str) -> i64 {
     -((hash as i64) + 1) // 恒 <= -1
 }
 
+/// 这个词是否已在本机单词本里（用阅读页收藏同一套 id 规则）。
+///
+/// 词卡靠它决定星标显示实心还是空心：只靠组件内部状态的话，
+/// 关掉词卡再打开就又会变成空心星，看起来像「收藏没成功」。
+pub fn has_local_word(conn: &Connection, word: &str) -> Result<bool, String> {
+    let id = local_word_id(word);
+    conn.query_row("SELECT 1 FROM words WHERE id = ?1", params![id], |_| Ok(()))
+        .optional()
+        .map(|found| found.is_some())
+        .map_err(|e| format!("查询单词失败: {e}"))
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LocalWordAdd {
     pub id: String,

@@ -1,10 +1,12 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- 与 values/themes.xml 保持一致：即使是系统深色模式也走浅色主题。 -->
-    <style name="Theme.pointra_mobile" parent="Theme.Material3.Light.NoActionBar">
-        <item name="android:windowBackground">#F7FBF9</item>
-        <item name="android:statusBarColor">#E6F6EF</item>
-        <item name="android:windowLightStatusBar">true</item>
-        <item name="android:navigationBarColor">#F7FBF9</item>
-        <item name="android:windowLightNavigationBar" tools:targetApi="27">true</item>
+    <!-- 系统深色模式下的原生外观：与 App 内的深色变量（bg 0f1613 / bg-top 16211c）对齐，
+         这样启动瞬间不会闪一下白底，状态栏图标也不会在深色背景上看不见。
+         注：XML 注释里不能出现双连字符，所以这里不写 CSS 变量名。 -->
+    <style name="Theme.pointra_mobile" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:windowBackground">#0F1613</item>
+        <item name="android:statusBarColor">#16211C</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarColor">#0F1613</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">false</item>
     </style>
 </resources>
