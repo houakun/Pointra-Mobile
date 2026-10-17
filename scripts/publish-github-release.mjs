@@ -22,7 +22,7 @@
  * 注：用 curl 而不是 node 的 fetch —— fetch 不读系统代理，国内直连 api.github.com 常失败。
  */
 import { readFile } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -60,18 +60,39 @@ function request(method, url, { token, json, binary, contentType }) {
     "-w",
     "\n%{http_code}",
   ];
+
+  const tempFiles = [];
   if (json !== undefined) {
-    argv.push("-H", "Content-Type: application/json", "-d", JSON.stringify(json));
+    // 【易错点】请求体必须走临时文件，不能当命令行参数传：
+    // Windows 下 execFileSync 会把含中文的参数按 GBK 交给 curl，
+    // GitHub 收到非法 UTF-8 就报 400 “Problems parsing JSON”（踩过）。
+    // 另外要用 --data-binary（而不是 -d）才能保留更新说明里的换行。
+    const tmp = path.join(os.tmpdir(), `pointra-gh-${process.pid}-${Date.now()}.json`);
+    writeFileSync(tmp, JSON.stringify(json), "utf8");
+    tempFiles.push(tmp);
+    argv.push("-H", "Content-Type: application/json", "--data-binary", `@${tmp}`);
   }
   if (binary) {
     argv.push("-H", `Content-Type: ${contentType ?? "application/octet-stream"}`, "--data-binary", `@${binary}`);
   }
   argv.push(url);
 
-  const out = execFileSync("curl", argv, {
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  let out;
+  try {
+    out = execFileSync("curl", argv, {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
+  } finally {
+    // 不管成败都要清理这个临时请求体（里面含更新说明，不该留在磁盘上）
+    for (const file of tempFiles) {
+      try {
+        unlinkSync(file);
+      } catch {
+        /* 清理失败不影响主流程 */
+      }
+    }
+  }
   const cut = out.lastIndexOf("\n");
   const status = Number(out.slice(cut + 1));
   const text = out.slice(0, cut);

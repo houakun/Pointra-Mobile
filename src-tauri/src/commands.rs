@@ -1036,7 +1036,8 @@ async fn check_update_online(app: &AppHandle) -> Result<Option<UpdateInfo>, Stri
         .json()
         .await
         .map_err(|e| format!("解析版本信息失败：{e}"))?;
-    info.newer = parse_version(&info.version) > parse_version(&app.package_info().version.to_string());
+    info.newer =
+        parse_version(&info.version) > parse_version(&app.package_info().version.to_string());
     info.source = "online".to_string();
     Ok(Some(info))
 }
@@ -1092,7 +1093,9 @@ pub async fn check_update(
         (_, Ok(Some(info))) => Ok(Some(info)),
         (_, Ok(None)) => Ok(None),
         // 电脑端也失败：把公网的失败原因一起报出来，方便判断是「没网」还是「没发布」
-        (Err(online_err), Err(pc_err)) => Err(format!("更新检查失败：{online_err}；电脑端：{pc_err}")),
+        (Err(online_err), Err(pc_err)) => {
+            Err(format!("更新检查失败：{online_err}；电脑端：{pc_err}"))
+        }
         (_, Err(pc_err)) => Err(pc_err),
     }
 }
