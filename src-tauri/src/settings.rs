@@ -17,19 +17,6 @@ fn default_theme() -> String {
     "system".to_string()
 }
 
-/// 词卡出现位置：`auto`（点词的左侧/右侧自动避开手指）/ `bottom` / `left` / `right`
-fn default_word_card_side() -> String {
-    "auto".to_string()
-}
-
-/// 只接受已知取值，别让手改过的 settings.json 把词卡顶到屏幕外。
-pub fn normalize_word_card_side(value: &str) -> String {
-    match value {
-        "bottom" | "left" | "right" | "auto" => value.to_string(),
-        _ => default_word_card_side(),
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
@@ -42,9 +29,6 @@ pub struct Settings {
     /// 主题：`system`（跟随系统）/ `light` / `dark`
     #[serde(default = "default_theme")]
     pub theme: String,
-    /// 阅读页词卡出现位置：`auto` / `bottom` / `left` / `right`
-    #[serde(default = "default_word_card_side")]
-    pub word_card_side: String,
     /// 上次同步完成时间（毫秒）
     #[serde(default)]
     pub last_sync_at: Option<i64>,
@@ -57,7 +41,6 @@ impl Default for Settings {
             goals: DailyGoals::default(),
             audio_accent: default_accent(),
             theme: default_theme(),
-            word_card_side: default_word_card_side(),
             last_sync_at: None,
         }
     }
@@ -102,15 +85,23 @@ mod tests {
         assert!(s.pairing.is_none());
         assert_eq!(s.goals.new_per_day, 20);
         assert_eq!(s.audio_accent, "us");
-        assert_eq!(s.word_card_side, "auto");
     }
 
+    /// 老版本写过 `word_card_side`（已废弃的设置项）→ 现在读到未知字段必须静默忽略，
+    /// 不能因为多了个字段就让整份设置解析失败、把用户设置打回默认值。
     #[test]
-    fn unknown_word_card_side_falls_back_to_auto() {
-        assert_eq!(normalize_word_card_side("left"), "left");
-        assert_eq!(normalize_word_card_side("right"), "right");
-        assert_eq!(normalize_word_card_side("bottom"), "bottom");
-        assert_eq!(normalize_word_card_side("sideways"), "auto");
+    fn legacy_word_card_side_field_is_ignored() {
+        let dir = std::env::temp_dir().join(format!("pointra-mobile-legacy-{}", now_ms()));
+        let path = dir.join("settings.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, r#"{"audio_accent":"uk","word_card_side":"right"}"#).unwrap();
+
+        let s = load(&path);
+        assert_eq!(s.audio_accent, "uk");
+        assert_eq!(s.theme, "system");
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir(&dir).ok();
     }
 
     #[test]

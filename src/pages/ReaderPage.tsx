@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import WordSheet, { type SheetSide } from "../components/WordSheet";
+import WordSheet from "../components/WordSheet";
 import ArticlePicks from "../components/ArticlePicks";
 import { useBackGuard } from "../hooks/useBackGuard";
 import type {
   Accent,
   ArticleDetail,
   ArticleSummary,
-  WordCardSide,
   WordLookup,
 } from "../types";
 
@@ -23,8 +22,6 @@ const FILTERS: { key: ArticleFilter; label: string }[] = [
 
 interface Props {
   accent: Accent;
-  /** 词卡出现位置（设置页里的「阅读页词卡位置」） */
-  cardSide: WordCardSide;
   onToast: (msg: string) => void;
   /** 收藏单词等会改变统计的操作，通知外层刷新（今日/词库数字） */
   onChanged: () => void;
@@ -145,7 +142,25 @@ export function splitBatch(raw: string): { title: string; body: string }[] {
     });
 }
 
-export default function ReaderPage({ accent, cardSide, onToast, onChanged, active }: Props) {
+/**
+ * 文章所属的「本地年月」（`YYYY-MM`）。
+ *
+ * 真题用 id 里解析出的年月（`cet6-2025-06-1` → `2025-06`）；
+ * 自写示例与导入文章没有年月字段，就用加入时间的**本地**年月（跟用户看到的一致）。
+ */
+function monthKeyOf(a: ArticleSummary): string {
+  if (a.year && a.month) return `${a.year}-${String(a.month).padStart(2, "0")}`;
+  const d = new Date(a.created_at);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/** 卡片标题：`2026 年 · 3 月` */
+function monthLabel(key: string): string {
+  const [year, month] = key.split("-");
+  return `${year} 年 · ${Number(month)} 月`;
+}
+
+export default function ReaderPage({ accent, onToast, onChanged, active }: Props) {
   const [articles, setArticles] = useState<ArticleSummary[]>([]);
   const [listLoading, setListLoading] = useState(true);
 
@@ -169,10 +184,14 @@ export default function ReaderPage({ accent, cardSide, onToast, onChanged, activ
 
   // 词卡
   const [sheetOpen, setSheetOpen] = useState(false);
+  /** 当前打开的月份（`YYYY-MM`）；null = 还停在「年 · 月」卡片网格首页 */
+  const [month, setMonth] = useState<string | null>(null);
+  /** 正在打开的文章 id（文章大/网络慢时先给个反馈，而不是几秒没动静） */
+  const [openingId, setOpeningId] = useState<string | null>(null);
+  /** 打开文章的请求序号：返回时作废迟到的响应 */
+  const articleReqId = useRef(0);
   /** 本篇速记（这篇文章收藏的生词 / 生句）是否打开 */
   const [picksOpen, setPicksOpen] = useState(false);
-  /** 本次词卡从哪边出来（auto 时按点词的左右半屏算） */
-  const [sheetSide, setSheetSide] = useState<SheetSide>("bottom");
   const [sheetLoading, setSheetLoading] = useState(false);
   const [sheetError, setSheetError] = useState<string | null>(null);
   const [lookup, setLookup] = useState<WordLookup | null>(null);
@@ -209,8 +228,28 @@ export default function ReaderPage({ accent, cardSide, onToast, onChanged, activ
 
   const closeArticle = useCallback(() => {
     // 返回列表时回到「我刚才点的那篇」所在的位置，而不是正文里的那个偏移量
+    articleReqId.current += 1; // 作废仍在路上的打开请求
+    setOpeningId(null);
     pendingRestore.current = listScroll.current;
     setArticle(null);
+  }, []);
+
+  /** 进入某个月份：记住网格位置，新页从顶部开始读 */
+  const openMonth = useCallback((key: string) => {
+    gridScroll.current = scroller()?.scrollTop ?? 0;
+    setMonth(key);
+    requestAnimationFrame(() => scroller()?.scrollTo({ top: 0 }));
+  }, []);
+
+  /** 从月份回到网格：还原网格位置 */
+  const closeMonth = useCallback(() => {
+    articleReqId.current += 1; // 作废仍在路上的打开请求
+    setOpeningId(null);
+    setMonth(null);
+    // 双 rAF：等网格重新渲染完再设 scrollTop，否则会被钳成 0
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => scroller()?.scrollTo({ top: gridScroll.current })),
+    );
   }, []);
 
   const clearPick = useCallback(() => {
@@ -219,10 +258,10 @@ export default function ReaderPage({ accent, cardSide, onToast, onChanged, activ
     setPickPlace(null);
   }, []);
 
-  // 返回键优先级：本篇速记 → 词卡 → 选中浮条 → 文章列表。
+  // 返回键优先级：本篇速记 → 词卡 → 取消选中 → 文章正文 → 月份列表 → 年月网格。
   // 必须带上 `active`：切到别的 tab 时本页只是被 display 隐藏，不该再拦返回键。
   useBackGuard(
-    (article !== null || sheetOpen || picksOpen) && active,
+    (article !== null || month !== null || sheetOpen || picksOpen) && active,
     useCallback(() => {
       if (picksOpen) {
         setPicksOpen(false);
@@ -236,8 +275,17 @@ export default function ReaderPage({ accent, cardSide, onToast, onChanged, activ
         clearPick();
         return;
       }
-      closeArticle();
-    }, [picksOpen, sheetOpen, picked, clearPick, closeArticle]),
+      if (article !== null) {
+        closeArticle();
+        return;
+      }
+      if (month !== null) {
+        closeMonth();
+      }
+      // 【依赖必须列全】少了 `article` 就会抱到旧闭包：
+      // 刚打开文章时回调里读到的还是 article=null，于是“返回一次”去关月份列表
+      // （表面上就是返回无效），再按一次又因为 month 已变而跳层。踩过。
+    }, [picksOpen, sheetOpen, picked, article, clearPick, closeArticle, month, closeMonth]),
   );
 
   const openArticle = useCallback(
@@ -245,8 +293,14 @@ export default function ReaderPage({ accent, cardSide, onToast, onChanged, activ
       // 先记位置再切：切完列表 DOM 就没了，读不到 scrollTop
       listScroll.current = scroller()?.scrollTop ?? 0;
       pendingRestore.current = null;
+      const seq = ++articleReqId.current;
+      setOpeningId(id);
       try {
         const detail = await api.getArticle(id);
+        // 【关键】请求回来时用户可能已经退回去了（文章大 / 网络慢时要好几秒）：
+        // 不判这一下的话，退到了月份或网格后会被迟到的事件重新推回正文，
+        // 表现就是“返回了一次却没反应，再按一次又跳过一层”。
+        if (seq !== articleReqId.current) return;
         setArticle(detail);
         setTranslations({});
         setShown({});
@@ -259,7 +313,9 @@ export default function ReaderPage({ accent, cardSide, onToast, onChanged, activ
         // 打开的是一篇新文章，从头读（不沿用列表那个偏移量，否则会停在正文中间）
         requestAnimationFrame(() => scroller()?.scrollTo({ top: 0 }));
       } catch (e) {
-        onToast(`打开文章失败：${e}`);
+        if (seq === articleReqId.current) onToast(`打开文章失败：${e}`);
+      } finally {
+        if (seq === articleReqId.current) setOpeningId(null);
       }
     },
     [onToast],
@@ -280,16 +336,7 @@ export default function ReaderPage({ accent, cardSide, onToast, onChanged, activ
   const openWord = useCallback(
     // 只传单词：不再为每个词请求它在文中的那句话译文
     // （词卡里那块「文中」已经按要求去掉了，少一次网络往返）
-    async (word: string, clientX?: number) => {
-      // auto：点屏幕左半边的词 → 卡片贴右边出；点右半边 → 贴左边出。
-      // 这样卡片天然避开手指和正在读的那一行。
-      const resolved: SheetSide =
-        cardSide === "auto"
-          ? (clientX ?? 0) < window.innerWidth / 2
-            ? "right"
-            : "left"
-          : cardSide;
-      setSheetSide(resolved);
+    async (word: string) => {
       const seq = ++lookupSeq.current;
       setSheetOpen(true);
       setSheetLoading(true);
@@ -306,7 +353,7 @@ export default function ReaderPage({ accent, cardSide, onToast, onChanged, activ
         if (seq === lookupSeq.current) setSheetLoading(false);
       }
     },
-    [cardSide],
+    [],
   );
 
   const toggleTranslation = useCallback(
@@ -397,6 +444,8 @@ export default function ReaderPage({ accent, cardSide, onToast, onChanged, activ
 
   // 分类：考试筛选 + 年份分组（素材量大了之后，平铺 140+ 篇根本找不着）
   const [filter, setFilter] = useState<ArticleFilter>("all");
+  /** 卡片网格的滚动位置：从某个月返回时还原 */
+  const gridScroll = useRef(0);
 
   const counts = useMemo(() => {
     const c = { all: articles.length, cet4: 0, cet6: 0, other: 0 };
@@ -416,21 +465,24 @@ export default function ReaderPage({ accent, cardSide, onToast, onChanged, activ
     [articles, filter],
   );
 
-  const groups = useMemo(() => {
+  /** 按「年 · 月」聚合：网格首页的每张卡片就是一个月的文章 */
+  const months = useMemo(() => {
     const map = new Map<string, ArticleSummary[]>();
     for (const item of visible) {
-      const key = item.year ? `${item.year} 年` : "示例与导入";
+      const key = monthKeyOf(item);
       const list = map.get(key);
       if (list) list.push(item);
       else map.set(key, [item]);
     }
-    // 年份倒序；「示例与导入」永远排最后
-    return [...map.entries()].sort(([a], [b]) => {
-      if (a === "示例与导入") return 1;
-      if (b === "示例与导入") return -1;
-      return b.localeCompare(a);
-    });
+    // 「年 - 月」倒序（新的在前）
+    return [...map.entries()].sort(([a], [b]) => b.localeCompare(a));
   }, [visible]);
+
+  /** 当前月份里的文章；用同一份 `visible`，所以 chips 筛选状态不会串 */
+  const monthArticles = useMemo(
+    () => (month === null ? [] : visible.filter((a) => monthKeyOf(a) === month)),
+    [month, visible],
+  );
 
   /**
    * 标题旁的「译」：只翻标题。
@@ -598,7 +650,7 @@ export default function ReaderPage({ accent, cardSide, onToast, onChanged, activ
               shown={Boolean(shown[index])}
               translating={translating === index}
               onToggle={() => void toggleTranslation(index, text)}
-              onWord={(word, clientX) => void openWord(word, clientX)}
+              onWord={(word) => void openWord(word)}
             />
           ))}
         </div>
@@ -665,7 +717,6 @@ export default function ReaderPage({ accent, cardSide, onToast, onChanged, activ
             error={sheetError}
             lookup={lookup}
             accent={accent}
-            side={sheetSide}
             articleId={article.id}
             onClose={() => setSheetOpen(false)}
             onToast={onToast}
@@ -685,7 +736,49 @@ export default function ReaderPage({ accent, cardSide, onToast, onChanged, activ
     );
   }
 
-  // --- 文章列表 ------------------------------------------------------------
+  // --- 某个月份的文章列表 --------------------------------------------------
+  if (month !== null) {
+    return (
+      <div>
+        <div className="reader-head">
+          <button className="btn ghost small" onClick={closeMonth}>
+            ← 月份
+          </button>
+          <div className="h1 month-head-title">{monthLabel(month)}</div>
+          <span className="muted">{monthArticles.length} 篇</span>
+        </div>
+
+        {!listLoading && monthArticles.length === 0 && (
+          <div className="empty">这个月没有文章了</div>
+        )}
+
+        <div className="card" style={{ padding: "4px 14px" }}>
+          {monthArticles.map((item) => (
+            <div className="list-item" key={item.id}>
+              <div className="main tappable" onClick={() => void openArticle(item.id)}>
+                <div className="title" style={{ whiteSpace: "normal" }}>
+                  {item.title}
+                </div>
+                <div className="sub origin">
+                  {openingId === item.id
+                    ? "正在打开…"
+                    : `${item.origin || "我的导入"} · ${item.paragraph_count} 段`}
+                </div>
+              </div>
+              <button
+                className="btn danger small"
+                onClick={() => void removeArticle(item.id, item.title)}
+              >
+                删除
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // --- 阅读页首页：按「年 · 月」的卡片网格 ----------------------------------
   return (
     <div>
       <div className="reader-head">
@@ -724,34 +817,33 @@ export default function ReaderPage({ accent, cardSide, onToast, onChanged, activ
         <div className="empty">这个分类下还没有文章</div>
       )}
 
-      {groups.map(([label, items]) => (
-        <div key={label}>
-          <div className="reader-group">
-            {label}
-            <span className="muted"> · {items.length} 篇</span>
-          </div>
-          <div className="card" style={{ padding: "4px 14px" }}>
-            {items.map((item) => (
-              <div className="list-item" key={item.id}>
-                <div className="main tappable" onClick={() => void openArticle(item.id)}>
-                  <div className="title" style={{ whiteSpace: "normal" }}>
-                    {item.title}
-                  </div>
-                  <div className="sub origin">
-                    {item.origin || "我的导入"} · {item.paragraph_count} 段
-                  </div>
-                </div>
-                <button
-                  className="btn danger small"
-                  onClick={() => void removeArticle(item.id, item.title)}
-                >
-                  删除
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
+      <div className="month-grid">
+        {months.map(([key, items]) => (
+          <button className="month-card" key={key} onClick={() => openMonth(key)}>
+            <span className="month-icon" aria-hidden="true">
+              {/* 日历图标：内联 SVG，跟着主题色走，不引外部图标库 */}
+              <svg
+                viewBox="0 0 24 24"
+                width="20"
+                height="20"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <rect x="3" y="4.5" width="18" height="16" rx="3" />
+                <path d="M3 9.5h18M8 3v3M16 3v3" />
+              </svg>
+            </span>
+            <span className="month-title">{monthLabel(key)}</span>
+            <span className="month-foot">
+              <span className="month-count">{items.length} 篇文章</span>
+              <span className="month-arrow">›</span>
+            </span>
+          </button>
+        ))}
+      </div>
 
       {importing && (
         <div className="sheet-mask" onClick={() => setImporting(false)}>
@@ -808,7 +900,7 @@ function ParagraphBlock({
   shown: boolean;
   translating: boolean;
   onToggle: () => void;
-  onWord: (word: string, clientX: number) => void;
+  onWord: (word: string) => void;
 }) {
   const tokens = useMemo(() => tokenize(text), [text]);
 
@@ -820,7 +912,7 @@ function ParagraphBlock({
             <span
               key={i}
               className={keywords.has(token.text.toLowerCase()) ? "rw kw" : "rw"}
-              onClick={(e) => onWord(token.text, e.clientX)}
+              onClick={() => onWord(token.text)}
             >
               {token.text}
             </span>

@@ -3,17 +3,12 @@ import { api, youdaoAudio } from "../api";
 import { EXCHANGE_LABEL } from "../labels";
 import type { Accent, WordLookup } from "../types";
 
-/** 词卡从哪边出来：底部（旧行为）/ 屏幕左侧 / 屏幕右侧 */
-export type SheetSide = "bottom" | "left" | "right";
-
 interface Props {
   loading: boolean;
   /** 查词失败的中文提示（Rust 侧已翻译成人话） */
   error: string | null;
   lookup: WordLookup | null;
   accent: Accent;
-  /** 出现位置。左右侧时卡片是一条贴边的竖栏，不遮住正文整行 */
-  side?: SheetSide;
   /** 从阅读页的哪篇文章点开的：收藏时一并记入该篇的「本篇生词」 */
   articleId?: string | null;
   onClose: () => void;
@@ -34,7 +29,6 @@ export default function WordSheet({
   error,
   lookup,
   accent,
-  side = "bottom",
   articleId = null,
   onClose,
   onToast,
@@ -84,10 +78,9 @@ export default function WordSheet({
       : [];
 
   return (
-    <div className={`sheet-mask side-${side}`} onClick={onClose}>
-      <div className={`sheet side-${side}`} onClick={(e) => e.stopPropagation()}>
-        {/* 抓手是「下拉关闭」的提示，侧栏没有这个手势，画上去反而误导 */}
-        {side === "bottom" && <div className="sheet-grip" />}
+    <div className="sheet-mask" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-grip" />
 
         {loading && (
           <div className="empty">

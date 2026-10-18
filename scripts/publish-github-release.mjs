@@ -272,10 +272,49 @@ async function main() {
       /* 首次没有 remote */
     }
     git("remote", "add", "origin", `https://github.com/${REPO}.git`);
-    git("push", "-f", "origin", cdnBranch);
+
+    const pushBranch = (branch, message) => {
+      git("checkout", "-q", "-B", branch);
+      git("add", "-A");
+      git(
+        "-c",
+        "user.email=release@local",
+        "-c",
+        "user.name=release",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        message,
+      );
+      git("push", "-f", "origin", branch);
+    };
+
+    pushBranch(cdnBranch, `cdn: ${meta.version}`);
     console.log("");
     console.log(`CDN 分支已推送（${cdnBranch}）——手机端无需 VPN 的下载地址：`);
     console.log(`  https://cdn.jsdelivr.net/gh/${REPO}@${cdnBranch}/pointra.apk`);
+
+    // 5) 再推一个**固定分支** `cdn-latest`，供「检查更新」用。
+    //
+    // 为什么需要它：检查更新本来只碰 GitHub 的 `releases/latest/download/...`，
+    // 那个地址会 302 到 objects.githubusercontent.com —— 国内常被阻断，
+    // 于是“检查更新”经常超时（而 jsDelivr 能通，却只在下载时才用）。
+    // 固定分支的代价是 jsDelivr 对 ref 有最长 12 小时缓存，所以推完必须 purge。
+    const latestBranch = "cdn-latest";
+    pushBranch(latestBranch, `cdn latest: ${meta.version}`);
+    for (const file of ["pointra.json", "pointra.apk"]) {
+      const purgeUrl = `https://purge.jsdelivr.net/gh/${REPO}@${latestBranch}/${file}`;
+      try {
+        execFileSync("curl", ["-sS", "--max-time", "20", purgeUrl], { encoding: "utf8" });
+      } catch (err) {
+        console.error(`！刷新 CDN 缓存失败（${file}）：${err.message}`);
+      }
+    }
+    console.log(
+      `固定分支已推送并刷新缓存（${latestBranch}）——检查更新走这个源：\n` +
+        `  https://cdn.jsdelivr.net/gh/${REPO}@${latestBranch}/pointra.json`,
+    );
   } catch (err) {
     console.error(`！CDN 分支推送失败（不影响上面的 release）：${err.message}`);
   }

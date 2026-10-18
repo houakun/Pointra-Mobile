@@ -480,13 +480,28 @@ pub const MAX_ARTICLE_CHARS: usize = 100_000;
 /// 用 id 而不是 `origin` 解析：id 是稳定结构（由命名约定保证），
 /// 而 origin 是给人看的中文句子，将来改文案就会把分类搞坏。
 pub fn parse_exam_year(id: &str) -> (String, Option<i64>) {
+    let (exam, year, _month) = parse_exam_year_month(id);
+    (exam, year)
+}
+
+/// 从 id 里取「考试类型 + 年 + 月」。
+///
+/// id 约定：`cet4-2025-06-2-...` —— 年、月都在 id 里（月份是第二段数字）。
+/// 阅读页按「年 · 月」分组（两列卡片），靠的就是这里解析出的月份；
+/// 自写示例与导入文章没有这两个字段，前端改用 `created_at` 的本地年月。
+pub fn parse_exam_year_month(id: &str) -> (String, Option<i64>, Option<i64>) {
     let mut parts = id.split('-');
     let exam = parts.next().unwrap_or_default();
     if exam != "cet4" && exam != "cet6" {
-        return (String::new(), None);
+        return (String::new(), None, None);
     }
     let year = parts.next().and_then(|y| y.parse::<i64>().ok());
-    (exam.to_string(), year)
+    // 月份越界（写错的素材 id）当没有处理，不要编出一个“13 月”的卡片
+    let month = parts
+        .next()
+        .and_then(|m| m.parse::<i64>().ok())
+        .filter(|m| (1..=12).contains(m));
+    (exam.to_string(), year, month)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -502,6 +517,8 @@ pub struct ArticleSummary {
     pub exam: String,
     /// 真题年份（如 2015）；自写示例与导入文章为 `None`
     pub year: Option<i64>,
+    /// 真题月份（1–12）；自写示例与导入文章为 `None`（前端改用 created_at 的本地年月）
+    pub month: Option<i64>,
     pub paragraph_count: i64,
     pub created_at: i64,
 }
@@ -622,7 +639,7 @@ pub fn list_articles(conn: &Connection) -> Result<Vec<ArticleSummary>, String> {
             let body: String = row.get(5)?;
             let origin: Option<String> = row.get(4)?;
             let id: String = row.get(0)?;
-            let (exam, year) = parse_exam_year(&id);
+            let (exam, year, month) = parse_exam_year_month(&id);
             Ok(ArticleSummary {
                 id,
                 title: row.get(1)?,
@@ -631,6 +648,7 @@ pub fn list_articles(conn: &Connection) -> Result<Vec<ArticleSummary>, String> {
                 origin: origin.unwrap_or_default(),
                 exam,
                 year,
+                month,
                 paragraph_count: crate::articles::split_paragraphs(&body).len() as i64,
                 created_at: row.get(6)?,
             })
@@ -1408,6 +1426,28 @@ mod tests {
         assert_eq!(
             parse_exam_year("import-1760000000000"),
             (String::new(), None)
+        );
+    }
+
+    /// 月份也要解析出来：阅读页按「年 · 月」分卡片，少了月份就只能按月平铺。
+    #[test]
+    fn parses_article_month_and_ignores_bad_values() {
+        assert_eq!(
+            parse_exam_year_month("cet6-2025-06-1-forest"),
+            ("cet6".to_string(), Some(2025), Some(6))
+        );
+        assert_eq!(
+            parse_exam_year_month("cet4-2015-12-3"),
+            ("cet4".to_string(), Some(2015), Some(12))
+        );
+        // 月份越界：当作没有，不要编出一张「13 月」的卡片
+        assert_eq!(
+            parse_exam_year_month("cet4-2015-13-1"),
+            ("cet4".to_string(), Some(2015), None)
+        );
+        assert_eq!(
+            parse_exam_year_month("import-1760000000000"),
+            (String::new(), None, None)
         );
     }
 

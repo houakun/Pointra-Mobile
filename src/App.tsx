@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import type { CardKind, Overview, Progress, Settings } from "./types";
-import { useBackGuard } from "./hooks/useBackGuard";
+import { useAndroidBackButton, useBackGuard } from "./hooks/useBackGuard";
 import TodayPage from "./pages/TodayPage";
 import StudyPage from "./pages/StudyPage";
 import MemoPage from "./pages/MemoPage";
@@ -35,7 +35,6 @@ const DEFAULT_SETTINGS: Settings = {
   goals: { new_per_day: 20, review_per_day: 100 },
   audio_accent: "us",
   theme: "system",
-  word_card_side: "auto",
   last_sync_at: null,
 };
 
@@ -173,8 +172,11 @@ export default function App() {
     return () => mq.removeEventListener("change", apply);
   }, [settings.theme]);
 
-  // 覆盖页打开时，Android 返回键 / 全面屏边缘手势先关掉它，而不是退出整个 App。
-  // 根页面（今日/词库/…）没有历史可回，则保持系统惯例（退出 App）。
+  // 接管 Android 返回键 / 全面屏向内滑手势：有覆盖层就关覆盖层，真到根页面才退出 App。
+  // 必须在根组件只调一次（具体机制见 hooks/useBackGuard.ts 里的长注释）。
+  useAndroidBackButton();
+
+  // 覆盖页打开时，返回键先关掉它，而不是退出整个 App。
   const overlayOpen = studying || memo || detail !== null;
   useBackGuard(
     overlayOpen,
@@ -234,7 +236,6 @@ export default function App() {
         <div style={{ display: tab === "reader" ? undefined : "none" }}>
           <ReaderPage
             accent={settings.audio_accent}
-            cardSide={settings.word_card_side ?? "auto"}
             active={tab === "reader"}
             onToast={showToast}
             onChanged={refresh}

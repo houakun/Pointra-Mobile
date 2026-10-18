@@ -920,21 +920,139 @@ select:focus {
   margin-bottom: 10px;
 }
 
+/* 阅读页首页：按「年 · 月」的两列卡片网格（点卡片进该月文章列表） */
+.month-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.month-card {
+  display: flex;
+  flex-direction: column;
+  /* button 的 UA 样式会让子项居中，这里显式拉伸：
+     不拉伸的话底部那行（N 篇文章 / ›）会因为“刚好包住内容”而让箭头挤在文字旁边 */
+  align-items: stretch;
+  gap: 6px;
+  padding: 16px 14px 14px;
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+
+.month-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 图标是方块，不能被上面那条 stretch 拉成整行 */
+  align-self: flex-start;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 2px;
+  border-radius: 10px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.month-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.month-foot {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.month-count {
+  font-size: 12px;
+  color: var(--accent-2);
+}
+
+.month-arrow {
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* 月份视图的标题（比首页大标题小一号，给「← 月份」和篇数腾位置） */
+.month-head-title {
+  flex: 1;
+  margin: 0;
+  font-size: 17px;
+  text-align: center;
+}
+
 /* 分类筛选（全部 / 四级 / 六级 / 示例导入） */
 .reader-filters {
   margin-bottom: 8px;
 }
 
-/* 分组标题：按年份分组，或「示例与导入」 */
-.reader-group {
-  margin: 14px 2px 6px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--muted);
+/* 句子本：日期导航 `‹ 2026/10/18 ›`（中间是可点的日期，点开弹系统日期选择器） */
+.day-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 2px;
 }
 
-.reader-group:first-child {
-  margin-top: 2px;
+.day-arrow {
+  flex: none;
+  width: 46px;
+  height: 40px;
+  padding: 0;
+  border-radius: 12px;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+
+.day-arrow:disabled {
+  opacity: 0.35;
+}
+
+.day-pick {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0;
+  text-align: center;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+/* 真正接收系统日期选择器的原生 input：只作为「弹板扳机」，不占位不显示 */
+.day-native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+  border: 0;
+}
+
+/* 检查更新的失败原因：留在页面上（toast 一闪而过，长文案看不清） */
+.update-error {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(214, 69, 69, 0.08);
+  color: var(--red);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 /* 更新说明：保留发布时写的换行（white-space: pre-wrap） */
@@ -1055,46 +1173,7 @@ select:focus {
   overscroll-behavior: contain;
 }
 
-/* 词卡出在屏幕左侧 / 右侧（设置页「阅读页词卡位置」）：
-   贴边的竖栏，只占一条边，不把正文下半屏全遮住。 */
-.sheet-mask.side-left {
-  align-items: stretch;
-  justify-content: flex-start;
-}
-
-.sheet-mask.side-right {
-  align-items: stretch;
-  justify-content: flex-end;
-}
-
-.sheet.side-left,
-.sheet.side-right {
-  width: min(86vw, 360px);
-  height: 100%;
-  max-height: 100%;
-  padding: calc(10px + var(--safe-top)) 14px calc(16px + var(--safe-bottom));
-  box-shadow: 0 0 24px rgba(18, 120, 90, 0.18);
-  animation: sheetInSide 0.18s ease-out;
-}
-
-.sheet.side-left {
-  border-radius: 0 18px 18px 0;
-}
-
-.sheet.side-right {
-  border-radius: 18px 0 0 18px;
-}
-
-@keyframes sheetInSide {
-  from {
-    transform: scale(0.98);
-    opacity: 0.6;
-  }
-  to {
-    transform: none;
-    opacity: 1;
-  }
-}
+/* 词卡固定从底部出来（曾做过左侧/右侧，实测侧栏还不如底部好用，已摸掉） */
 
 @keyframes sheetUp {
   from {

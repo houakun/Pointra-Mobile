@@ -18,20 +18,11 @@ export type Accent = "us" | "uk";
 /** 主题：跟随系统 / 强制浅色 / 强制深色 */
 export type Theme = "system" | "light" | "dark";
 
-/**
- * 阅读页词卡出现位置。
- *
- * `auto` = 点词的左半屏就出右侧、右半屏就出左侧（不遮住正在读的那行）。
- */
-export type WordCardSide = "auto" | "bottom" | "left" | "right";
-
 export interface Settings {
   pairing: Pairing | null;
   goals: DailyGoals;
   audio_accent: Accent;
   theme: Theme;
-  /** 阅读页词卡位置；旧版本 settings.json 没这个字段，读取时按 auto 兜底 */
-  word_card_side?: WordCardSide;
   last_sync_at: number | null;
 }
 
@@ -157,6 +148,8 @@ export interface ArticleSummary {
   exam: string;
   /** 真题年份；自写示例与导入文章为 null */
   year: number | null;
+  /** 真题月份（1–12）；自写示例与导入文章为 null（前端改用 created_at 的本地年月） */
+  month: number | null;
   paragraph_count: number;
   created_at: number;
 }

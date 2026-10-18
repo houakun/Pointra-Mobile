@@ -74,10 +74,23 @@ pub fn day_start(now_ms: i64, utc_offset_minutes: i64) -> i64 {
 }
 
 /// 学习日的日期键，形如 `2026-10-11`（用于 `daily_stats` 主键）。
+///
+/// 注意它带 **04:00 日界**（凌晨 4 点前算前一天）——句子本按日期浏览用的是
+/// 自然日，别拿这个当自然日用，要用 `calendar_day`。
 pub fn day_key(now_ms: i64, utc_offset_minutes: i64) -> String {
-    let start = day_start(now_ms, utc_offset_minutes);
-    // 转成「本地日历日」再格式化，避免手写月份天数表
-    let local = start + utc_offset_minutes * 60_000;
+    calendar_day(
+        day_start(now_ms, utc_offset_minutes),
+        utc_offset_minutes,
+    )
+}
+
+/// 本地**自然日**键，形如 `2026-10-18`（不带 04:00 日界）。
+///
+/// 与 `day_range_ms` 严格互逆：`day_range_ms(calendar_day(ms, tz), tz)` 得到的
+/// `[start, end)` 区间一定包含 `ms`。句子本的「按日期浏览」两边都靠这个不变量。
+pub fn calendar_day(ms: i64, utc_offset_minutes: i64) -> String {
+    // 先平移到本地时间轴，再按整天取商：这样不用手写月份天数表
+    let local = ms + utc_offset_minutes * 60_000;
     let days = local.div_euclid(DAY_MS);
     let (y, m, d) = civil_from_days(days);
     format!("{y:04}-{m:02}-{d:02}")

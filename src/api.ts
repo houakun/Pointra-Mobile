@@ -62,8 +62,23 @@ export const api = {
       offset,
       limit,
     }),
-  browseSentences: (keyword: string, offset: number, limit: number) =>
-    invoke<BrowsePage>("browse_sentences", { keyword, offset, limit }),
+  /** 句子本：按「本地自然日」看一天（`addedOn` = `YYYY-MM-DD`），可叠加关键词 */
+  browseSentences: (
+    keyword: string,
+    addedOn: string | null,
+    offset: number,
+    limit: number,
+  ) =>
+    invoke<BrowsePage>("browse_sentences", {
+      keyword,
+      addedOn,
+      utcOffsetMinutes: tzOffset(),
+      offset,
+      limit,
+    }),
+  /** 最近一次收藏句子的日期（句子本打开时定位到这天；一条都没有时为 null） */
+  latestSentenceDay: () =>
+    invoke<string | null>("latest_sentence_day", { utcOffsetMinutes: tzOffset() }),
   deleteSentence: (id: string) => invoke<void>("delete_sentence", { id }),
 
   getCard: (kind: CardKind, id: string) => invoke<CardDetail>("get_card", { kind, id }),

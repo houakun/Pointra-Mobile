@@ -65,8 +65,6 @@ pub async fn save_settings(
     next.goals = settings.goals;
     next.audio_accent = settings.audio_accent;
     next.theme = settings.theme;
-    // 前端传上来的可能是旧版本没有的字段（或手改过的非法值），统一收敛到合法集合
-    next.word_card_side = settings::normalize_word_card_side(&settings.word_card_side);
     settings::save(&state.settings_path, &next)?;
     *guard = next.clone();
     Ok(next)
@@ -367,12 +365,34 @@ pub async fn browse_words(
 pub async fn browse_sentences(
     state: State<'_, AppState>,
     keyword: String,
+    added_on: Option<String>,
+    utc_offset_minutes: i64,
     offset: i64,
     limit: i64,
 ) -> Result<BrowsePage, String> {
     let db = state.db.clone();
     blocking(db, move |conn| {
-        browse::browse_sentences(conn, &keyword, offset, limit)
+        browse::browse_sentences(
+            conn,
+            &keyword,
+            added_on.as_deref(),
+            utc_offset_minutes,
+            offset,
+            limit,
+        )
+    })
+    .await
+}
+
+/// 最近一次收藏句子的日期（`YYYY-MM-DD`）——句子本打开时定位到这一天。
+#[tauri::command]
+pub async fn latest_sentence_day(
+    state: State<'_, AppState>,
+    utc_offset_minutes: i64,
+) -> Result<Option<String>, String> {
+    let db = state.db.clone();
+    blocking(db, move |conn| {
+        browse::latest_sentence_day(conn, utc_offset_minutes)
     })
     .await
 }
@@ -923,6 +943,69 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// 防回归：前端 `api.ts` 里 invoke 的每个命令，都必须在命令注册块里登记。
+    ///
+    /// 踩过：新加了 `list_article_picks` 命令与前端调用，却忘了登记 ——
+    /// Rust 单测全绿、APK 也打包成功，真机上点「速记」只会报
+    /// “Command list_article_picks not found”。这个测试就是那次漏登记的锁。
+    ///
+    /// 注：搜索用的标记串在运行时拼出来（见下面），不能写死成完整字面量 ——
+    /// 写死就变成“测试匹配到测试自己”，前面白踩了三次。
+    #[test]
+    fn every_frontend_invoke_is_registered() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let api = std::fs::read_to_string(root.join("../src/api.ts"))
+            .expect("读不到 ../src/api.ts（测试依赖前端源码在同一仓库里）");
+        let handler =
+            std::fs::read_to_string(root.join("src/commands.rs")).expect("读不到 src/commands.rs");
+
+        // 标记串在运行时拼出来，源码里不出现完整字面量：
+        // 否则测试会先命中「它自己的注释/字符串」而不是真正要找的代码位置。
+        let run_marker = ["pub", "fn", "run()"].join(" ");
+        let reg_marker = ["generate", "_handler!["].join("");
+        let run_start = handler
+            .find(&run_marker)
+            .expect("commands.rs 里找不到 run() 入口函数");
+        let start = run_start
+            + handler[run_start..]
+                .find(&reg_marker)
+                .expect("run() 里找不到命令注册块");
+        let rest = &handler[start..];
+        let close = ["]", ")"].join("");
+        let end = rest.find(&close).expect("注册块没有正常收尾");
+        let block = &rest[..end];
+
+        let mut missing: Vec<String> = Vec::new();
+        let mut checked = 0;
+        for (idx, _) in api.match_indices("invoke") {
+            let tail = &api[idx..];
+            let Some(open) = tail.find('(') else { continue };
+            let after = &tail[open + 1..];
+            let Some(quote) = after.find('"') else {
+                continue;
+            };
+            let name_start = quote + 1;
+            let Some(name_end) = after[name_start..].find('"') else {
+                continue;
+            };
+            let name = &after[name_start..name_start + name_end];
+            // 命令名都是小写 + 下划线：借此滤掉误匹配（如 "@tauri-apps/api/core"）
+            if name.is_empty() || !name.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+                continue;
+            }
+            checked += 1;
+            if !block.contains(name) {
+                missing.push(name.to_string());
+            }
+        }
+
+        assert!(
+            checked > 10,
+            "只解析出 {checked} 个命令，测试本身可能已经失效（api.ts 改写法了？）"
+        );
+        assert!(missing.is_empty(), "前端调用了没注册的命令：{missing:?}");
+    }
+
     /// 详情页靠 `usual_dict` 渲染释义、靠 `exchange` 渲染「词形变化」，
     /// 这两个字段必须真的下发（之前 `get_card` 漏了 exchange，前端读了空）。
     #[test]
@@ -1011,6 +1094,15 @@ const ONLINE_META_URL: &str =
 const ONLINE_APK_URL: &str =
     "https://github.com/houakun/Pointra-Mobile/releases/latest/download/pointra.apk";
 
+/// 「最新版本」元数据的第二个公网源（jsDelivr 上的固定分支）。
+///
+/// 为什么要它：`releases/latest/download/...` 会 302 到 objects.githubusercontent.com，
+/// 国内常被阻断 —— 只碰这一个源时，「检查更新」就会像网上报的那样莫名其妙超时。
+/// jsDelivr 国内可达；发布脚本每次推完这个分支都会调 purge API 刷新缓存，
+/// 所以不会拿到 12 小时前的旧数据（见 scripts/publish-github-release.mjs）。
+const CDN_META_URL: &str =
+    "https://cdn.jsdelivr.net/gh/houakun/Pointra-Mobile@cdn-latest/pointra.json";
+
 /// CDN 下载源（jsDelivr）。
 ///
 /// 为什么要单独一个源：GitHub 的 release 附件会 302 到
@@ -1096,45 +1188,82 @@ where
     }
 }
 
-/// 公网源查版本（GitHub Releases）。`Ok(None)` = 还没发布过 release。
-async fn check_update_online(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
+/// 把网络错误翻成人话。
+///
+/// 原始英文（`error sending request for url (...)`）只写进 logcat 供排查，
+/// **不进界面文案** —— 之前那句叠了 URL 的报错在手机上又长又看不懂。
+fn net_error_text(e: &reqwest::Error, who: &str) -> String {
+    println!("[pointra-update] {who} 请求失败：{e}");
+    if e.is_timeout() {
+        format!("{who}超时")
+    } else if e.is_connect() {
+        format!("{who}连不上")
+    } else if e.is_decode() {
+        format!("{who}返回的内容读不懂")
+    } else {
+        format!("{who}请求失败")
+    }
+}
+
+/// 从某个源取「最新版本」元数据。`Ok(None)` = 这个源上还没有发布过。
+async fn fetch_online_meta(
+    app: &AppHandle,
+    who: &str,
+    url: &str,
+) -> Result<Option<UpdateInfo>, String> {
     // 诊断日志（Android 上会进 logcat）：更新走不通时要能看出卡在哪一步。
-    println!("[pointra-update] 开始在线检查 {ONLINE_META_URL}");
-    let client = update_client()?;
-    println!("[pointra-update] 客户端已就绪，发起请求");
-    let resp = client
-        .get(ONLINE_META_URL)
-        .timeout(std::time::Duration::from_secs(10))
+    println!("[pointra-update] {who}：检查 {url}");
+    let resp = update_client()?
+        .get(url)
+        .timeout(std::time::Duration::from_secs(8))
         .send()
         .await
-        .map_err(|e| {
-            println!("[pointra-update] 请求失败：{e}");
-            if e.is_timeout() {
-                "连更新服务器超时".to_string()
-            } else if e.is_connect() {
-                "连不上更新服务器（可能没联网）".to_string()
-            } else {
-                format!("连不上更新服务器：{e}")
-            }
-        })?;
-    println!("[pointra-update] 收到响应 {}", resp.status());
+        .map_err(|e| net_error_text(&e, who))?;
+    println!("[pointra-update] {who}：响应 {}", resp.status());
 
-    // 404 = 仓库还没发过 release，或附件名不对（不算错误，直接回落电脑端）
+    // 404 = 仓库还没发过 release，或附件名不对（不算错误，交给别的源/电脑端）
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
     if !resp.status().is_success() {
-        return Err(format!("更新服务器返回 {}", resp.status()));
+        return Err(format!("{who}返回 {}", resp.status()));
     }
 
     let mut info: UpdateInfo = resp
         .json()
         .await
-        .map_err(|e| format!("解析版本信息失败：{e}"))?;
+        .map_err(|_| format!("{who}返回的版本信息读不懂"))?;
     info.newer =
         parse_version(&info.version) > parse_version(&app.package_info().version.to_string());
     info.source = "online".to_string();
     Ok(Some(info))
+}
+
+/// 并行问两个公网源，**谁先给出结论就用谁**（GitHub 优先，它是发布源头）。
+///
+/// 为什么不用 `join!`：它要等两个 future 都结束 —— GitHub 在国内常被阻断，
+/// 单次要等满 8 秒超时，那即使 CDN 一秒就回了，用户还是得干等 8 秒。
+/// 用 `select_ok` 拿到第一个«通»的结果就返回（另一个请求会被直接丢弃）。
+async fn check_update_online(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
+    use std::future::Future;
+    use std::pin::Pin;
+
+    // 两个 async fn 调用返回不同的不透明类型，装箱成同一个 trait object 才能放进 select_ok
+    type MetaFut<'a> =
+        Pin<Box<dyn Future<Output = Result<Option<UpdateInfo>, String>> + Send + 'a>>;
+    let futures: Vec<MetaFut<'_>> = vec![
+        Box::pin(fetch_online_meta(app, "GitHub", ONLINE_META_URL)),
+        Box::pin(fetch_online_meta(app, "CDN", CDN_META_URL)),
+    ];
+
+    match futures_util::future::select_ok(futures).await {
+        // 第一个通的源给了结论：有新版本 / 已是最新
+        Ok((Some(info), _)) => Ok(Some(info)),
+        // 有源是通的，但还没发布过 release
+        Ok((None, _)) => Ok(None),
+        // 两个源都不通：各自的具体原因已经写进 logcat，界面只给一句人话
+        Err(_) => Err("连不上更新服务器（GitHub 和 CDN 都试过了）".to_string()),
+    }
 }
 
 /// 问电脑端有没有新版本。`Ok(None)` = 电脑端还没发布（http 404）。
@@ -1149,7 +1278,7 @@ async fn check_update_via_pc(
         .timeout(std::time::Duration::from_secs(8))
         .send()
         .await
-        .map_err(|e| format!("无法连接电脑端：{e}"))?;
+        .map_err(|e| net_error_text(&e, "电脑端"))?;
 
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
@@ -1173,8 +1302,8 @@ pub async fn check_update(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Option<UpdateInfo>, String> {
-    // 公网检查甤 12 秒硬超时：超了就当公网不可用，回落电脑端
-    let online = with_deadline(12, "连更新服务器", check_update_online(&app)).await;
+    // 公网检查（两个源并行，各自 8 秒超时）：超了就当公网不可用，回落电脑端
+    let online = with_deadline(14, "连更新服务器", check_update_online(&app)).await;
     match &online {
         // 公网已经有结论（有新版/同版本）就直接用
         Ok(Some(_)) => return online,
@@ -1184,14 +1313,14 @@ pub async fn check_update(
         Err(_) => {}
     }
 
+    // 电脑端也失败时，主句用公网的结论（更常见、更可行动），电脑端只补一句：
+    // 「电脑没开」是很正常的状态，不该把它当成整个检查失败的原因（之前那个
+    // “无法连接电脑端：error sending request for url (...)” 就是这么来的）。
     let via_pc = check_update_via_pc(&app, &state).await;
     match (online, via_pc) {
         (_, Ok(Some(info))) => Ok(Some(info)),
         (_, Ok(None)) => Ok(None),
-        // 电脑端也失败：把公网的失败原因一起报出来，方便判断是「没网」还是「没发布」
-        (Err(online_err), Err(pc_err)) => {
-            Err(format!("更新检查失败：{online_err}；电脑端：{pc_err}"))
-        }
+        (Err(online_err), Err(_)) => Err(format!("{online_err}；电脑端也不通")),
         (_, Err(pc_err)) => Err(pc_err),
     }
 }
@@ -1395,6 +1524,7 @@ pub fn run() {
             sync_now,
             browse_words,
             browse_sentences,
+            latest_sentence_day,
             delete_sentence,
             list_articles,
             get_article,
@@ -1404,6 +1534,7 @@ pub fn run() {
             translate_paragraph,
             add_local_word,
             add_local_sentence,
+            list_article_picks,
             app_version,
             get_card,
             build_queue,

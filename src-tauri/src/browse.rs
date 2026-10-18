@@ -8,7 +8,7 @@
 
 use crate::sm2;
 use rusqlite::types::Value as SqlValue;
-use rusqlite::{params, params_from_iter, Connection};
+use rusqlite::{params_from_iter, Connection};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,6 +211,8 @@ pub fn browse_words(
 pub fn browse_sentences(
     conn: &Connection,
     keyword: &str,
+    added_on: Option<&str>,
+    utc_offset_minutes: i64,
     offset: i64,
     limit: i64,
 ) -> Result<BrowsePage, String> {
@@ -218,24 +220,40 @@ pub fn browse_sentences(
     let offset = offset.max(0);
     let limit = limit.clamp(1, 200);
 
+    // 句子本一次只看一天（右上角 `‹ 日期 ›` 切换），所以日期是必选的筛选维度之一；
+    // 关键词与日期可组合（「这一天里含某词的句子」）。
+    let mut where_sql = String::from("(text LIKE ? OR IFNULL(trans, '') LIKE ?)");
+    let mut args: Vec<SqlValue> = vec![SqlValue::Text(pattern.clone()), SqlValue::Text(pattern)];
+    if let Some(date) = added_on.filter(|d| !d.trim().is_empty()) {
+        // 与词库同一套做法：先把「本地日历日」换成毫秒区间，再按区间筛（可用索引、可单测）
+        let (start, end) = sm2::day_range_ms(date, utc_offset_minutes)?;
+        where_sql.push_str(" AND added_at >= ? AND added_at < ?");
+        args.push(SqlValue::Integer(start));
+        args.push(SqlValue::Integer(end));
+    }
+
     let total: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM sentences WHERE text LIKE ?1 OR IFNULL(trans, '') LIKE ?1",
-            params![pattern],
+            &format!("SELECT COUNT(*) FROM sentences WHERE {where_sql}"),
+            params_from_iter(args.iter()),
             |row| row.get::<_, i64>(0),
         )
         .map_err(|e| format!("统计句子本失败: {e}"))?;
 
     let mut stmt = conn
-        .prepare(
-            "SELECT id, text, trans, state, due_at, added_at FROM sentences \
-             WHERE text LIKE ?1 OR IFNULL(trans, '') LIKE ?1 \
-             ORDER BY seq DESC LIMIT ?2 OFFSET ?3",
-        )
+        .prepare(&format!(
+            // 按「加入时间」倒序：组内新的在上；没有 added_at 的老记录兜到 0 排最后。
+            "SELECT id, text, trans, state, due_at, added_at FROM sentences WHERE {where_sql} \
+             ORDER BY COALESCE(added_at, 0) DESC, seq DESC LIMIT ? OFFSET ?"
+        ))
         .map_err(|e| format!("准备句子本查询失败: {e}"))?;
 
+    let mut page_args = args.clone();
+    page_args.push(SqlValue::Integer(limit + 1));
+    page_args.push(SqlValue::Integer(offset));
+
     let rows = stmt
-        .query_map(params![pattern, limit + 1, offset], |row| {
+        .query_map(params_from_iter(page_args.iter()), |row| {
             Ok(BrowseItem {
                 id: row.get(0)?,
                 text: row.get(1)?,
@@ -251,16 +269,25 @@ pub fn browse_sentences(
     for row in rows {
         items.push(row.map_err(|e| format!("读取句子失败: {e}"))?);
     }
-    let has_more = items.len() as i64 > limit;
-    if has_more {
-        items.truncate(limit as usize);
-    }
+    Ok(finish(items, total, limit))
+}
 
-    Ok(BrowsePage {
-        items,
-        total,
-        has_more,
-    })
+/// 最近一次收藏句子的「本地日历日」（`YYYY-MM-DD`）；一条都没有时返回 `None`。
+///
+/// 句子本打开时定位到这一天，而不是死盯「今天」——今天没收藏就会看到空白页。
+pub fn latest_sentence_day(
+    conn: &Connection,
+    utc_offset_minutes: i64,
+) -> Result<Option<String>, String> {
+    let latest: Option<i64> = conn
+        .query_row(
+            // 0 / NULL 都是「没有时间」的老记录，不拿来做定位依据
+            "SELECT MAX(added_at) FROM sentences WHERE added_at IS NOT NULL AND added_at > 0",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("查询句子日期失败: {e}"))?;
+    Ok(latest.map(|ms| sm2::calendar_day(ms, utc_offset_minutes)))
 }
 
 #[cfg(test)]
@@ -269,6 +296,9 @@ mod tests {
     use crate::db::{apply_sentence_record, apply_word_record};
     use crate::sm2::Grade;
     use serde_json::json;
+
+    /// 东八区。个别测 UTC 边界的用例会在函数内部重新定义 `TZ` 遮蔽它。
+    const TZ: i64 = 480;
 
     fn seed(conn: &Connection, words: &[(&str, &str)]) {
         for (i, (word, dit)) in words.iter().enumerate() {
@@ -363,7 +393,7 @@ mod tests {
             .query_row(
                 "EXPLAIN QUERY PLAN SELECT id FROM words \
                  WHERE normalized >= ?1 AND normalized < ?2 ORDER BY normalized ASC",
-                params![lo, hi],
+                params_from_iter([lo, hi]),
                 |row| row.get::<_, String>(3),
             )
             .unwrap();
@@ -388,15 +418,15 @@ mod tests {
         )
         .unwrap();
 
-        let by_text = browse_sentences(&conn, "committee", 0, 10).unwrap();
+        let by_text = browse_sentences(&conn, "committee", None, TZ, 0, 10).unwrap();
         assert_eq!(by_text.total, 1);
         assert_eq!(by_text.items[0].id, "s1");
 
-        let by_trans = browse_sentences(&conn, "雨", 0, 10).unwrap();
+        let by_trans = browse_sentences(&conn, "雨", None, TZ, 0, 10).unwrap();
         assert_eq!(by_trans.total, 1);
         assert_eq!(by_trans.items[0].id, "s2");
 
-        let all = browse_sentences(&conn, "", 0, 10).unwrap();
+        let all = browse_sentences(&conn, "", None, TZ, 0, 10).unwrap();
         assert_eq!(all.total, 2);
     }
 
@@ -407,6 +437,121 @@ mod tests {
         // limit = 0 会被夹到 1，而不是返回空页
         let page = browse_words(&conn, "", StateFilter::All, None, 0, 0).unwrap();
         assert_eq!(page.items.len(), 1);
+    }
+
+    /// 句子本必须按「加入时间」倒序：前端据此按日期分组，顺序错了分组就乱。
+    /// 注：以前是 `seq DESC`，PC 下发记录的 seq 与 added_at 不成正比。
+    #[test]
+    fn sentences_are_ordered_by_added_at_desc() {
+        let conn = crate::db::open_in_memory().unwrap();
+        for (seq, id, text, added) in [
+            (1_i64, "s-old", "old one", Some(1_600_000_000_000_i64)),
+            (2, "s-new", "newest one", Some(1_760_000_000_000)),
+            (3, "s-mid", "middle one", Some(1_700_000_000_000)),
+            // 没有时间的记录（老数据）必须排最后，不能随机排在前面
+            (4, "s-none", "unknown time", None),
+        ] {
+            let mut record = json!({"seq": seq, "id": id, "text": text});
+            if let Some(added) = added {
+                record["added_at"] = json!(added);
+            }
+            apply_sentence_record(&conn, &record).unwrap();
+        }
+
+        let page = browse_sentences(&conn, "", None, TZ, 0, 10).unwrap();
+        let ids: Vec<&str> = page.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["s-new", "s-mid", "s-old", "s-none"],
+            "应按下标时间倒序，未知时间排最后"
+        );
+
+        // 分页也不能把顺序打乱：第一页 2 条 + 第二页 2 条 = 完整顺序
+        let first = browse_sentences(&conn, "", None, TZ, 0, 2).unwrap();
+        let second = browse_sentences(&conn, "", None, TZ, 2, 2).unwrap();
+        let paged: Vec<&str> = first
+            .items
+            .iter()
+            .chain(second.items.iter())
+            .map(|i| i.id.as_str())
+            .collect();
+        assert_eq!(paged, ids);
+    }
+
+    /// 句子本一次只看一天（`‹ 日期 ›` 切换）：按「本地日历日」换算成毫秒区间过滤，
+    /// 且同一批数据在不同时区下归属的日期会不同。
+    #[test]
+    fn sentence_book_shows_one_calendar_day_at_a_time() {
+        let conn = crate::db::open_in_memory().unwrap();
+        let day = "2026-10-18";
+        let (start, end) = crate::sm2::day_range_ms(day, TZ).unwrap();
+
+        // 用 day_range_ms 算出的区间边界造数据：区间内两条、前后各一条
+        for (seq, id, text, added) in [
+            (1_i64, "s-in-1", "on that day morning", start + 1_000),
+            (2, "s-in-2", "on that day night", end - 1_000),
+            (3, "s-before", "the day before", start - 1_000),
+            (4, "s-after", "the day after", end + 1_000),
+        ] {
+            apply_sentence_record(
+                &conn,
+                &json!({"seq": seq, "id": id, "text": text, "added_at": added}),
+            )
+            .unwrap();
+        }
+
+        let page = browse_sentences(&conn, "", Some(day), TZ, 0, 10).unwrap();
+        let ids: Vec<&str> = page.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(ids, vec!["s-in-2", "s-in-1"], "只显示当天的，且新的在前");
+        assert_eq!(page.total, 2);
+
+        // 关键词与日期可组合：当天 + 含 morning 的只有一条
+        let filtered = browse_sentences(&conn, "morning", Some(day), TZ, 0, 10).unwrap();
+        assert_eq!(filtered.items.len(), 1);
+        assert_eq!(filtered.items[0].id, "s-in-1");
+
+        // 换一天
+        let next = browse_sentences(&conn, "", Some("2026-10-19"), TZ, 0, 10).unwrap();
+        let next_ids: Vec<&str> = next.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(next_ids, vec!["s-after"]);
+
+        // 同样的记录，换 UTC 看：本地 08:00 之后那几条才落在 2026-10-18
+        let utc = browse_sentences(&conn, "", Some(day), 0, 0, 10).unwrap();
+        let utc_ids: Vec<&str> = utc.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(
+            utc_ids,
+            vec!["s-after", "s-in-2"],
+            "时区变了，归属的日期也跟着变"
+        );
+    }
+
+    /// 句子本打开时定位到「最近有句子的那天」，而不是死盯今天（今天没收藏就是空白页）。
+    #[test]
+    fn latest_sentence_day_points_at_the_newest_day() {
+        let conn = crate::db::open_in_memory().unwrap();
+        assert!(
+            latest_sentence_day(&conn, TZ).unwrap().is_none(),
+            "空句子本没有可定位的日期"
+        );
+
+        let (start, _) = crate::sm2::day_range_ms("2026-10-18", TZ).unwrap();
+        apply_sentence_record(
+            &conn,
+            &json!({"seq": 1, "id": "a", "text": "older", "added_at": start}),
+        )
+        .unwrap();
+        apply_sentence_record(
+            &conn,
+            &json!({"seq": 2, "id": "b", "text": "newer", "added_at": start + 3 * 86_400_000_i64}),
+        )
+        .unwrap();
+        // 「没有时间」的老记录不该影响定位
+        apply_sentence_record(&conn, &json!({"seq": 3, "id": "c", "text": "no time"})).unwrap();
+
+        assert_eq!(
+            latest_sentence_day(&conn, TZ).unwrap().as_deref(),
+            Some("2026-10-21")
+        );
     }
 
     /// 「按加入日期搜索」：只返回该日加入的词（本地日历日）。

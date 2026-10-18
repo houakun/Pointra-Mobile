@@ -8,7 +8,6 @@ import type {
   Theme,
   UpdateInfo,
   UpdateProgress,
-  WordCardSide,
 } from "../types";
 
 interface Props {
@@ -19,8 +18,6 @@ interface Props {
 
 export default function SettingsPage({ settings, onChange, onToast }: Props) {
   const [base, setBase] = useState(settings.pairing?.base ?? "10.0.2.2:31415");
-  // 旧安装的 settings.json 里没这个字段，读出来是 undefined，统一按「自动」展示
-  const cardSide: WordCardSide = settings.word_card_side ?? "auto";
   const [code, setCode] = useState("");
   const [deviceName, setDeviceName] = useState("Android");
   const [busy, setBusy] = useState<string | null>(null);
@@ -35,6 +32,8 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
   /** 自更新：检查/下载走 Rust 命令，最后一步用 JNI 拉系统安装器 */
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [checking, setChecking] = useState(false);
+  /** 检查更新的失败原因（留在卡片里给用户看，不只弹 toast） */
+  const [checkError, setCheckError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [dl, setDl] = useState<UpdateProgress | null>(null);
   /** 拉安装器失败时才把下载地址展示出来当退路 */
@@ -129,16 +128,21 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
 
   const check = async () => {
     setChecking(true);
+    setCheckError(null);
     try {
       const info = await withTimeout(api.checkUpdate(), 20000, "检查更新");
       setUpdate(info);
-      if (!info) onToast("电脑端还没放新版本包");
+      if (!info) onToast("还没有发布过新版本");
       else if (!info.newer)
         onToast(
           `已是最新版本（v${info.version}${info.source === "online" ? "，来自网络" : "，来自电脑"}）`,
         );
+      else onToast(`发现新版本 v${info.version}`);
     } catch (e) {
-      onToast(`${e}`);
+      // 失败原因留在卡片里而不是只弹 toast：toast 2.6 秒就没了，
+      // 手机上看不完一长串原因（之前那句叠了 URL 的报错就是这么让人看不懂的）。
+      setCheckError(String(e));
+      onToast("检查更新失败");
     } finally {
       setChecking(false);
     }
@@ -206,17 +210,6 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
 
   const setTheme = async (theme: Theme) => {
     const next = { ...settings, theme };
-    onChange(next);
-    try {
-      await api.saveSettings(next);
-    } catch (e) {
-      onToast(`保存失败：${e}`);
-    }
-  };
-
-  /** 词卡位置：阅读页点词后卡片从哪边出来 */
-  const setWordCardSide = async (side: WordCardSide) => {
-    const next = { ...settings, word_card_side: side };
     onChange(next);
     try {
       await api.saveSettings(next);
@@ -326,6 +319,15 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
           <span className="muted">{version ? `当前 v${version}` : "当前版本未知"}</span>
         </div>
 
+        {checkError && (
+          <div className="update-error">
+            检查更新失败：{checkError}
+            <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+              可以试：切到能上网的 WiFi/流量，或打开电脑端的「手机同步」后再点一次。
+            </div>
+          </div>
+        )}
+
         {update && (
           <div style={{ marginTop: 8 }}>
             <div className="muted">
@@ -410,39 +412,6 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
           </button>
           <button className={settings.audio_accent === "uk" ? "on" : ""} onClick={() => setAccent("uk")}>
             英音
-          </button>
-        </div>
-      </div>
-
-      <div className="card">
-        <strong>阅读页词卡位置</strong>
-        <div className="muted" style={{ margin: "6px 0 10px" }}>
-          「自动」按你点的那一行在屏幕哪半边，把词卡放到另一边，尽量不遮住正在读的句子。
-        </div>
-        <div className="chips">
-          <button
-            className={cardSide === "auto" ? "on" : ""}
-            onClick={() => void setWordCardSide("auto")}
-          >
-            自动
-          </button>
-          <button
-            className={cardSide === "left" ? "on" : ""}
-            onClick={() => void setWordCardSide("left")}
-          >
-            屏幕左侧
-          </button>
-          <button
-            className={cardSide === "right" ? "on" : ""}
-            onClick={() => void setWordCardSide("right")}
-          >
-            屏幕右侧
-          </button>
-          <button
-            className={cardSide === "bottom" ? "on" : ""}
-            onClick={() => void setWordCardSide("bottom")}
-          >
-            底部
           </button>
         </div>
       </div>
