@@ -90,6 +90,20 @@ CREATE TABLE IF NOT EXISTS article_cache (
     payload    TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT 0
 );
+
+-- 「本篇生词 / 生句」：收藏时记下是从哪篇文章收藏的。
+--
+-- 为什么不给 words/sentences 加一列 article_id：同一个词可以在多篇文章里被收藏，
+-- 一对多必须用关联表才不会被后一篇文章覆盖。item_id 指向 words.id / sentences.id，
+-- 删了词就查不到（查询用 INNER JOIN，自动滤掉孤儿关联）。
+CREATE TABLE IF NOT EXISTS article_picks (
+    article_id TEXT    NOT NULL,
+    kind       TEXT    NOT NULL,
+    item_id    TEXT    NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (article_id, kind, item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_article_picks ON article_picks(article_id, created_at);
 "#;
 
 pub fn open(path: &Path) -> Result<Connection, String> {
@@ -712,6 +726,14 @@ pub fn delete_article(conn: &Connection, id: &str) -> Result<(), String> {
         return Err(format!("文章不存在: {id}"));
     }
 
+    // 文章没了，它名下的「本篇生词/生句」关联也一并清掉
+    // （词与句本身保留在词库/句子本里，不跟着删）
+    conn.execute(
+        "DELETE FROM article_picks WHERE article_id = ?1",
+        params![id],
+    )
+    .map_err(|e| format!("清理本篇生词生句失败: {e}"))?;
+
     if crate::articles::is_builtin_article(id) {
         let mut removed: Vec<String> = get_sync_flag(conn, "articles_removed")
             .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -812,14 +834,38 @@ pub struct LocalSentenceAdd {
     pub existed: bool,
 }
 
+/// 记下「这条词/句是从哪篇文章收藏的」。
+///
+/// 用 `INSERT OR IGNORE`：同一篇里重复收藏同一个词，保留最早那次的时间，
+/// 列表顺序才不会因为再点一次就跳到最前面。
+fn link_article_pick(
+    conn: &Connection,
+    article_id: &str,
+    kind: &str,
+    item_id: &str,
+) -> Result<(), String> {
+    if article_id.trim().is_empty() {
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO article_picks (article_id, kind, item_id, created_at) \
+         VALUES (?1, ?2, ?3, ?4)",
+        params![article_id, kind, item_id, crate::settings::now_ms()],
+    )
+    .map_err(|e| format!("记录本篇生词生句失败: {e}"))?;
+    Ok(())
+}
+
 /// 把阅读页选中的句子写进本机句子本，立即可复习。
 ///
 /// `trans` 可以没有（用户没先翻译就收藏）：此时保留库里原有的译文，
 /// 不会被空值覆盖（SQL 里用 COALESCE）。
+/// `article_id` 非空时，同时记入该篇的「本篇生句」。
 pub fn add_local_sentence(
     conn: &Connection,
     text: &str,
     trans: Option<&str>,
+    article_id: Option<&str>,
 ) -> Result<LocalSentenceAdd, String> {
     let text = text.trim();
     if text.is_empty() {
@@ -850,6 +896,10 @@ pub fn add_local_sentence(
     )
     .map_err(|e| format!("加入句子本失败: {e}"))?;
 
+    if let Some(article_id) = article_id {
+        link_article_pick(conn, article_id, "sentence", &id)?;
+    }
+
     Ok(LocalSentenceAdd {
         id,
         text: text.to_string(),
@@ -866,10 +916,13 @@ pub struct LocalWordAdd {
 }
 
 /// 把阅读页查到的词写进本机词库，立即可背。
+///
+/// `article_id` 非空时，同时记入该篇的「本篇生词」。
 pub fn add_local_word(
     conn: &Connection,
     word: &str,
     entry: &crate::dict::WordLookup,
+    article_id: Option<&str>,
 ) -> Result<LocalWordAdd, String> {
     let word = word.trim();
     if word.is_empty() {
@@ -911,11 +964,98 @@ pub fn add_local_word(
     )
     .map_err(|e| format!("加入单词本失败: {e}"))?;
 
+    if let Some(article_id) = article_id {
+        link_article_pick(conn, article_id, "word", &id)?;
+    }
+
     Ok(LocalWordAdd {
         id,
         word: word.to_string(),
         existed,
     })
+}
+
+// ---------------------------------------------------------------------------
+// 本篇生词 / 生句（按文章维度看收藏）
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ArticlePickWord {
+    pub id: String,
+    pub word: String,
+    pub phonetic_us: Option<String>,
+    pub phonetic_uk: Option<String>,
+    /// 主释义（最多 3 个义项，用「；」连接）
+    pub dit: Option<String>,
+    pub usual_dict: Vec<crate::dict::DictGroup>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ArticlePickSentence {
+    pub id: String,
+    pub text: String,
+    pub trans: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ArticlePicks {
+    pub words: Vec<ArticlePickWord>,
+    pub sentences: Vec<ArticlePickSentence>,
+}
+
+/// 某篇文章里收藏过的生词与生句（最近收藏的在前）。
+///
+/// 用 INNER JOIN：词/句从词库/句子本里删掉后，这条关联自然不再显示。
+pub fn list_article_picks(conn: &Connection, article_id: &str) -> Result<ArticlePicks, String> {
+    let words: Vec<ArticlePickWord> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT w.id, w.word, w.phonetic_us, w.phonetic_uk, w.dit, w.usual_dict \
+                 FROM article_picks p JOIN words w ON w.id = p.item_id \
+                 WHERE p.article_id = ?1 AND p.kind = 'word' \
+                 ORDER BY p.created_at DESC, w.word COLLATE NOCASE",
+            )
+            .map_err(|e| format!("读取本篇生词失败: {e}"))?;
+        let rows = stmt
+            .query_map(params![article_id], |row| {
+                let usual: Option<String> = row.get(5)?;
+                Ok(ArticlePickWord {
+                    id: row.get(0)?,
+                    word: row.get(1)?,
+                    phonetic_us: row.get(2)?,
+                    phonetic_uk: row.get(3)?,
+                    dit: row.get(4)?,
+                    usual_dict: usual
+                        .and_then(|raw| serde_json::from_str(&raw).ok())
+                        .unwrap_or_default(),
+                })
+            })
+            .map_err(|e| format!("读取本篇生词失败: {e}"))?;
+        rows.filter_map(Result::ok).collect()
+    };
+
+    let sentences: Vec<ArticlePickSentence> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT s.id, s.text, s.trans \
+                 FROM article_picks p JOIN sentences s ON s.id = p.item_id \
+                 WHERE p.article_id = ?1 AND p.kind = 'sentence' \
+                 ORDER BY p.created_at DESC, s.seq",
+            )
+            .map_err(|e| format!("读取本篇生句失败: {e}"))?;
+        let rows = stmt
+            .query_map(params![article_id], |row| {
+                Ok(ArticlePickSentence {
+                    id: row.get(0)?,
+                    text: row.get(1)?,
+                    trans: row.get(2)?,
+                })
+            })
+            .map_err(|e| format!("读取本篇生句失败: {e}"))?;
+        rows.filter_map(Result::ok).collect()
+    };
+
+    Ok(ArticlePicks { words, sentences })
 }
 
 #[cfg(test)]
@@ -1275,8 +1415,13 @@ mod tests {
     #[test]
     fn local_sentence_is_isolated_and_keeps_progress() {
         let conn = open_in_memory().unwrap();
-        let added = add_local_sentence(&conn, "  Hello world.  ", Some("你好，世界。")).unwrap();
-        assert!(added.id.starts_with("mobile-s-"), "id 要有本机前缀：{}", added.id);
+        let added =
+            add_local_sentence(&conn, "  Hello world.  ", Some("你好，世界。"), None).unwrap();
+        assert!(
+            added.id.starts_with("mobile-s-"),
+            "id 要有本机前缀：{}",
+            added.id
+        );
         assert!(!added.existed);
         assert_eq!(added.text, "Hello world.", "文本要 trim");
         assert_eq!(stats(&conn, NOW).unwrap().sentence_count, 1);
@@ -1292,12 +1437,16 @@ mod tests {
 
         // 学一轮后再收藏（不带译文）：进度不动，已有译文也不能被空值覆盖
         grade_card(&conn, "sentences", &added.id, Grade::Good, NOW, TZ).unwrap();
-        let learned = card_state_of(&conn, "sentences", &added.id).unwrap().unwrap();
-        let again = add_local_sentence(&conn, "Hello world.", None).unwrap();
+        let learned = card_state_of(&conn, "sentences", &added.id)
+            .unwrap()
+            .unwrap();
+        let again = add_local_sentence(&conn, "Hello world.", None, None).unwrap();
         assert!(again.existed);
         assert_eq!(again.id, added.id);
 
-        let after = card_state_of(&conn, "sentences", &added.id).unwrap().unwrap();
+        let after = card_state_of(&conn, "sentences", &added.id)
+            .unwrap()
+            .unwrap();
         assert_eq!(after.reps, learned.reps, "重复收藏不能重置进度");
         assert_eq!(after.interval, learned.interval);
         let trans: String = conn
@@ -1313,6 +1462,64 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM sentences", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1, "同一句只能有一条本机记录");
+    }
+
+    /// 「本篇生词/生句」：同一篇里重复收藏只留一条，同一个词收藏到两篇互不覆盖。
+    #[test]
+    fn article_picks_track_per_article_and_survive_duplicates() {
+        let conn = open_in_memory().unwrap();
+        let a = save_article(&conn, "A", "One two three.").unwrap();
+        let b = save_article(&conn, "B", "Four five six.").unwrap();
+
+        let w =
+            add_local_word(&conn, "significant", &lookup_of("significant"), Some(&a.id)).unwrap();
+        // 同一篇里重复收藏同一个词：关联只留一条
+        add_local_word(&conn, "significant", &lookup_of("significant"), Some(&a.id)).unwrap();
+        // 同一个词在另一篇也收藏：两篇各有一条
+        add_local_word(&conn, "significant", &lookup_of("significant"), Some(&b.id)).unwrap();
+        // 没有文章归属的收藏（例如从别处调用）不进任何一篇
+        add_local_word(&conn, "plain", &lookup_of("plain"), None).unwrap();
+
+        let s = add_local_sentence(&conn, "One two three.", Some("一二三。"), Some(&a.id)).unwrap();
+
+        let picks_a = list_article_picks(&conn, &a.id).unwrap();
+        assert_eq!(picks_a.words.len(), 1, "同一篇里重复收藏只算一条");
+        assert_eq!(picks_a.words[0].word, "significant");
+        assert_eq!(
+            picks_a.words[0].usual_dict[0].values,
+            vec!["重要的".to_string()]
+        );
+        assert_eq!(picks_a.sentences.len(), 1);
+        assert_eq!(picks_a.sentences[0].id, s.id);
+        assert_eq!(picks_a.sentences[0].trans.as_deref(), Some("一二三。"));
+
+        let picks_b = list_article_picks(&conn, &b.id).unwrap();
+        assert_eq!(picks_b.words.len(), 1);
+        assert!(picks_b.sentences.is_empty());
+
+        // 词从词库里删掉 → 这条关联自然不显示（INNER JOIN 滤掉孤儿）
+        conn.execute("DELETE FROM words WHERE id = ?1", params![w.id])
+            .unwrap();
+        assert!(list_article_picks(&conn, &a.id).unwrap().words.is_empty());
+
+        // 删文章 → 该篇的关联一并清理，但词/句本身还在自己本子里
+        delete_article(&conn, &a.id).unwrap();
+        let left: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM article_picks WHERE article_id = ?1",
+                params![a.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "删文章要连带清掉本篇生词生句关联");
+        let still: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sentences WHERE id = ?1",
+                params![s.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(still, 1, "句子本身要留在句子本里");
     }
 
     #[test]
@@ -1346,7 +1553,7 @@ mod tests {
     #[test]
     fn local_word_enters_the_new_queue() {
         let conn = open_in_memory().unwrap();
-        let added = add_local_word(&conn, "Significant", &lookup_of("significant")).unwrap();
+        let added = add_local_word(&conn, "Significant", &lookup_of("significant"), None).unwrap();
 
         assert!(added.id.starts_with("mobile-"), "id 要有前缀：{}", added.id);
         assert!(!added.existed);
@@ -1370,11 +1577,11 @@ mod tests {
     #[test]
     fn local_word_resave_keeps_progress_and_does_not_duplicate() {
         let conn = open_in_memory().unwrap();
-        let first = add_local_word(&conn, "significant", &lookup_of("significant")).unwrap();
+        let first = add_local_word(&conn, "significant", &lookup_of("significant"), None).unwrap();
         grade_word(&conn, &first.id, Grade::Good, NOW, TZ).unwrap();
         let learned = word_state(&conn, &first.id).unwrap().unwrap();
 
-        let again = add_local_word(&conn, "significant", &lookup_of("significant")).unwrap();
+        let again = add_local_word(&conn, "significant", &lookup_of("significant"), None).unwrap();
         assert!(again.existed, "第二次收藏要能识别出已存在");
         assert_eq!(again.id, first.id);
 
@@ -1392,7 +1599,7 @@ mod tests {
     #[test]
     fn local_word_coexists_with_pc_record_of_the_same_word() {
         let conn = open_in_memory().unwrap();
-        let local = add_local_word(&conn, "significant", &lookup_of("significant")).unwrap();
+        let local = add_local_word(&conn, "significant", &lookup_of("significant"), None).unwrap();
         // 用户在本机背了几轮
         grade_word(&conn, &local.id, Grade::Good, NOW, TZ).unwrap();
         let local_state = word_state(&conn, &local.id).unwrap().unwrap();

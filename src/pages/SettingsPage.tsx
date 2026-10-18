@@ -1,7 +1,15 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "../api";
-import type { Accent, Settings, SyncProgress, Theme, UpdateInfo, UpdateProgress } from "../types";
+import type {
+  Accent,
+  Settings,
+  SyncProgress,
+  Theme,
+  UpdateInfo,
+  UpdateProgress,
+  WordCardSide,
+} from "../types";
 
 interface Props {
   settings: Settings;
@@ -11,6 +19,8 @@ interface Props {
 
 export default function SettingsPage({ settings, onChange, onToast }: Props) {
   const [base, setBase] = useState(settings.pairing?.base ?? "10.0.2.2:31415");
+  // 旧安装的 settings.json 里没这个字段，读出来是 undefined，统一按「自动」展示
+  const cardSide: WordCardSide = settings.word_card_side ?? "auto";
   const [code, setCode] = useState("");
   const [deviceName, setDeviceName] = useState("Android");
   const [busy, setBusy] = useState<string | null>(null);
@@ -204,6 +214,17 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
     }
   };
 
+  /** 词卡位置：阅读页点词后卡片从哪边出来 */
+  const setWordCardSide = async (side: WordCardSide) => {
+    const next = { ...settings, word_card_side: side };
+    onChange(next);
+    try {
+      await api.saveSettings(next);
+    } catch (e) {
+      onToast(`保存失败：${e}`);
+    }
+  };
+
   const reset = async () => {
     if (!window.confirm("会清空本机词库与学习进度（PC 端不受影响），确定吗？")) return;
     setBusy("reset");
@@ -389,6 +410,39 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
           </button>
           <button className={settings.audio_accent === "uk" ? "on" : ""} onClick={() => setAccent("uk")}>
             英音
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <strong>阅读页词卡位置</strong>
+        <div className="muted" style={{ margin: "6px 0 10px" }}>
+          「自动」按你点的那一行在屏幕哪半边，把词卡放到另一边，尽量不遮住正在读的句子。
+        </div>
+        <div className="chips">
+          <button
+            className={cardSide === "auto" ? "on" : ""}
+            onClick={() => void setWordCardSide("auto")}
+          >
+            自动
+          </button>
+          <button
+            className={cardSide === "left" ? "on" : ""}
+            onClick={() => void setWordCardSide("left")}
+          >
+            屏幕左侧
+          </button>
+          <button
+            className={cardSide === "right" ? "on" : ""}
+            onClick={() => void setWordCardSide("right")}
+          >
+            屏幕右侧
+          </button>
+          <button
+            className={cardSide === "bottom" ? "on" : ""}
+            onClick={() => void setWordCardSide("bottom")}
+          >
+            底部
           </button>
         </div>
       </div>

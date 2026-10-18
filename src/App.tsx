@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import type { CardKind, Overview, Progress, Settings } from "./types";
@@ -35,6 +35,7 @@ const DEFAULT_SETTINGS: Settings = {
   goals: { new_per_day: 20, review_per_day: 100 },
   audio_accent: "us",
   theme: "system",
+  word_card_side: "auto",
   last_sync_at: null,
 };
 
@@ -50,6 +51,37 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const toastTimer = useRef<number | null>(null);
+  /** 滚动容器（共用一个 .app-body，所以切 tab 要自己记住各自的位置） */
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const tabScroll = useRef<Record<Tab, number>>({
+    today: 0,
+    reader: 0,
+    vocab: 0,
+    sentences: 0,
+    settings: 0,
+  });
+
+  /**
+   * 切 tab：先把当前 tab 的滚动位置存下来。
+   *
+   * 所有页面共用一个 `.app-body` 滚动容器，不记忆的话会出现
+   * 「阅读翻到第 80 段 → 去看词库 → 词库也停在半空」这种串位。
+   */
+  const goTab = useCallback(
+    (next: Tab) => {
+      const body = bodyRef.current;
+      if (body && next !== tab) tabScroll.current[tab] = body.scrollTop;
+      setTab(next);
+    },
+    [tab],
+  );
+
+  // 切完再恢复目标 tab 自己的位置（layout 阶段做，不会先闪一下顶部）
+  useLayoutEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    body.scrollTop = tabScroll.current[tab] ?? 0;
+  }, [tab]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -185,7 +217,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <div className="app-body">
+      <div className="app-body" ref={bodyRef}>
         {tab === "today" && (
           <TodayPage
             progress={progress}
@@ -202,6 +234,7 @@ export default function App() {
         <div style={{ display: tab === "reader" ? undefined : "none" }}>
           <ReaderPage
             accent={settings.audio_accent}
+            cardSide={settings.word_card_side ?? "auto"}
             active={tab === "reader"}
             onToast={showToast}
             onChanged={refresh}
@@ -243,16 +276,16 @@ export default function App() {
       )}
 
       <nav className="tabbar">
-        <TabButton icon="📅" label="今日" active={tab === "today"} onClick={() => setTab("today")} />
-        <TabButton icon="📖" label="阅读" active={tab === "reader"} onClick={() => setTab("reader")} />
-        <TabButton icon="📚" label="词库" active={tab === "vocab"} onClick={() => setTab("vocab")} />
+        <TabButton icon="📅" label="今日" active={tab === "today"} onClick={() => goTab("today")} />
+        <TabButton icon="📖" label="阅读" active={tab === "reader"} onClick={() => goTab("reader")} />
+        <TabButton icon="📚" label="词库" active={tab === "vocab"} onClick={() => goTab("vocab")} />
         <TabButton
           icon="💬"
           label="句子"
           active={tab === "sentences"}
-          onClick={() => setTab("sentences")}
+          onClick={() => goTab("sentences")}
         />
-        <TabButton icon="⚙️" label="设置" active={tab === "settings"} onClick={() => setTab("settings")} />
+        <TabButton icon="⚙️" label="设置" active={tab === "settings"} onClick={() => goTab("settings")} />
       </nav>
 
       {toast && <div className="toast">{toast}</div>}

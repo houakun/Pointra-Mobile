@@ -65,6 +65,8 @@ pub async fn save_settings(
     next.goals = settings.goals;
     next.audio_accent = settings.audio_accent;
     next.theme = settings.theme;
+    // 前端传上来的可能是旧版本没有的字段（或手改过的非法值），统一收敛到合法集合
+    next.word_card_side = settings::normalize_word_card_side(&settings.word_card_side);
     settings::save(&state.settings_path, &next)?;
     *guard = next.clone();
     Ok(next)
@@ -635,6 +637,7 @@ pub async fn translate_paragraph(
 pub async fn add_local_word(
     state: State<'_, AppState>,
     word: String,
+    article_id: Option<String>,
 ) -> Result<db::LocalWordAdd, String> {
     let word = word.trim().to_string();
     if word.is_empty() {
@@ -643,7 +646,10 @@ pub async fn add_local_word(
 
     let db = state.db.clone();
     let (entry, _) = resolve_word_entry(&state, &word).await?;
-    blocking(db, move |conn| db::add_local_word(conn, &word, &entry)).await
+    blocking(db, move |conn| {
+        db::add_local_word(conn, &word, &entry, article_id.as_deref())
+    })
+    .await
 }
 
 /// 把阅读页**选中的句子**加进本机句子本（译文可选）。
@@ -655,12 +661,23 @@ pub async fn add_local_sentence(
     state: State<'_, AppState>,
     text: String,
     trans: Option<String>,
+    article_id: Option<String>,
 ) -> Result<db::LocalSentenceAdd, String> {
     let db = state.db.clone();
     blocking(db, move |conn| {
-        db::add_local_sentence(conn, &text, trans.as_deref())
+        db::add_local_sentence(conn, &text, trans.as_deref(), article_id.as_deref())
     })
     .await
+}
+
+/// 某篇文章里收藏过的生词与生句（阅读页右上角「速记」用）。
+#[tauri::command]
+pub async fn list_article_picks(
+    state: State<'_, AppState>,
+    article_id: String,
+) -> Result<db::ArticlePicks, String> {
+    let db = state.db.clone();
+    blocking(db, move |conn| db::list_article_picks(conn, &article_id)).await
 }
 
 /// 当前 App 版本。
@@ -994,6 +1011,19 @@ const ONLINE_META_URL: &str =
 const ONLINE_APK_URL: &str =
     "https://github.com/houakun/Pointra-Mobile/releases/latest/download/pointra.apk";
 
+/// CDN 下载源（jsDelivr）。
+///
+/// 为什么要单独一个源：GitHub 的 release 附件会 302 到
+/// `objects.githubusercontent.com`，那个域名在国内常被阻断 ——
+/// 「能检查更新」（只碰 github.com）不等于「能下载」。jsDelivr 国内可达。
+///
+/// 为什么 URL 带版本号（`@cdn-v0.4.4`）而不是固定分支：jsDelivr 对 git ref
+/// 的内容有最长 12 小时缓存，固定分支会让手机在发版后拿到旧包；
+/// 带版本的 ref 是全新 URL，天然无缓存问题（发布脚本会建对应分支）。
+fn cdn_apk_url(version: &str) -> String {
+    format!("https://cdn.jsdelivr.net/gh/houakun/Pointra-Mobile@cdn-v{version}/pointra.apk")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateInfo {
     pub version: String,
@@ -1211,22 +1241,40 @@ async fn download_apk_from(app: &AppHandle, url: &str, who: &str) -> Result<Stri
 /// 下载 APK 到应用缓存目录（该目录已被 manifest 里的 FileProvider 暴露），
 /// 返回本地路径——由前端再交给系统安装器。
 ///
-/// 与 `check_update` 一致：**先公网，失败再回落电脑端**。
+/// **三个源依次尝试**（国内网络环境下这三个的可用性差别很大）：
+/// 1. CDN（jsDelivr）—— 手机不需要 VPN，首选；
+/// 2. GitHub 原始地址 —— 可能卡在 objects.githubusercontent.com；
+/// 3. 电脑端 —— 内网，最快，但要求电脑开着且已配对。
 #[tauri::command]
 pub async fn download_update(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
+    let mut errors: Vec<String> = Vec::new();
+
+    // 1) CDN：要带版本号才能拼地址，所以先问一次版本（小请求，很快）
+    match with_deadline(12, "查询版本", check_update_online(&app)).await {
+        Ok(Some(info)) => match download_apk_from(&app, &cdn_apk_url(&info.version), "CDN").await {
+            Ok(path) => return Ok(path),
+            Err(err) => errors.push(err),
+        },
+        Ok(None) => errors.push("CDN：还没发布版本".to_string()),
+        Err(err) => errors.push(format!("CDN：{err}")),
+    }
+
+    // 2) GitHub 原始附件地址
     match download_apk_from(&app, ONLINE_APK_URL, "更新服务器").await {
-        Ok(path) => Ok(path),
-        Err(online_err) => {
-            // 公网不行（没网 / GitHub 不通 / 还没上传附件）→ 试电脑端
-            let Ok((base, _)) = current_pairing(&state) else {
-                return Err(online_err);
-            };
-            let url = format!("{}/api/app/download", base.trim_end_matches('/'));
-            download_apk_from(&app, &url, "电脑端")
-                .await
-                .map_err(|pc_err| format!("{online_err}；电脑端：{pc_err}"))
+        Ok(path) => return Ok(path),
+        Err(err) => errors.push(err),
+    }
+
+    // 3) 电脑端（内网回落）
+    if let Ok((base, _)) = current_pairing(&state) {
+        let url = format!("{}/api/app/download", base.trim_end_matches('/'));
+        match download_apk_from(&app, &url, "电脑端").await {
+            Ok(path) => return Ok(path),
+            Err(err) => errors.push(err),
         }
     }
+
+    Err(format!("下载失败：{}", errors.join("；")))
 }
 
 // ---------------------------------------------------------------------------

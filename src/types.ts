@@ -18,11 +18,20 @@ export type Accent = "us" | "uk";
 /** 主题：跟随系统 / 强制浅色 / 强制深色 */
 export type Theme = "system" | "light" | "dark";
 
+/**
+ * 阅读页词卡出现位置。
+ *
+ * `auto` = 点词的左半屏就出右侧、右半屏就出左侧（不遮住正在读的那行）。
+ */
+export type WordCardSide = "auto" | "bottom" | "left" | "right";
+
 export interface Settings {
   pairing: Pairing | null;
   goals: DailyGoals;
   audio_accent: Accent;
   theme: Theme;
+  /** 阅读页词卡位置；旧版本 settings.json 没这个字段，读取时按 auto 兜底 */
+  word_card_side?: WordCardSide;
   last_sync_at: number | null;
 }
 
@@ -211,4 +220,27 @@ export interface LocalWordAdd {
   word: string;
   /** `true` = 这个词本机已经收藏过，这次只刷新了词义 */
   existed: boolean;
+}
+
+/** 「本篇生词」的一条（`list_article_picks`） */
+export interface ArticlePickWord {
+  id: string;
+  word: string;
+  phonetic_us: string | null;
+  phonetic_uk: string | null;
+  dit: string | null;
+  usual_dict: DictGroup[];
+}
+
+/** 「本篇生句」的一条 */
+export interface ArticlePickSentence {
+  id: string;
+  text: string;
+  trans: string | null;
+}
+
+/** 某篇文章里收藏过的生词与生句 */
+export interface ArticlePicks {
+  words: ArticlePickWord[];
+  sentences: ArticlePickSentence[];
 }

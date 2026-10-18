@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import WordSheet from "../components/WordSheet";
+import WordSheet, { type SheetSide } from "../components/WordSheet";
+import ArticlePicks from "../components/ArticlePicks";
 import { useBackGuard } from "../hooks/useBackGuard";
-import type { Accent, ArticleDetail, ArticleSummary, WordLookup } from "../types";
+import type {
+  Accent,
+  ArticleDetail,
+  ArticleSummary,
+  WordCardSide,
+  WordLookup,
+} from "../types";
 
 /** 分类筛选项：先按考试分，再按年份分组 */
 type ArticleFilter = "all" | "cet4" | "cet6" | "other";
@@ -16,11 +23,47 @@ const FILTERS: { key: ArticleFilter; label: string }[] = [
 
 interface Props {
   accent: Accent;
+  /** 词卡出现位置（设置页里的「阅读页词卡位置」） */
+  cardSide: WordCardSide;
   onToast: (msg: string) => void;
   /** 收藏单词等会改变统计的操作，通知外层刷新（今日/词库数字） */
   onChanged: () => void;
   /** 是否正当前台展示：切到别的 tab 时不要拦 Android 返回键（页面并没在展示） */
   active: boolean;
+}
+
+/**
+ * 选中浮条的高度估算（单行按钮 + 上下 padding），
+ * 用来判断选区旁边还放不放得下。
+ */
+const PICK_BAR_H = 46;
+
+/** 浮条的落点：选区下方 / 选区上方 / 停到底部导航上方（跨屏大选区时兼用） */
+interface PickPlacement {
+  place: "below" | "above" | "dock";
+  top?: number;
+  bottom?: number;
+}
+
+/**
+ * 算浮条落在哪。
+ *
+ * 优先放在**选区下方**：Android 的系统「复制 / 分享 / 全选」菜单默认贴在选区上方，
+ * 放下面两边互不遮挡（之前固定在屏幕最底部，离手指和选区都太远）。
+ * 下方不够就翻到选区上方（向上展开）；连上方都放不下（整段跨屏全选）就停到底部导航上方。
+ */
+function pickPlacement(rect: DOMRect): PickPlacement {
+  const vh = window.innerHeight;
+  const gap = 8;
+  if (rect.bottom + gap + PICK_BAR_H < vh - 84) {
+    return { place: "below", top: rect.bottom + gap };
+  }
+  // 用「距离视口底部多少」做锤点，向上展开时高度才自适应
+  const aboveBottom = vh - rect.top + gap;
+  if (aboveBottom + PICK_BAR_H < vh - 64) {
+    return { place: "above", bottom: aboveBottom };
+  }
+  return { place: "dock" };
 }
 
 interface Token {
@@ -102,7 +145,7 @@ export function splitBatch(raw: string): { title: string; body: string }[] {
     });
 }
 
-export default function ReaderPage({ accent, onToast, onChanged, active }: Props) {
+export default function ReaderPage({ accent, cardSide, onToast, onChanged, active }: Props) {
   const [articles, setArticles] = useState<ArticleSummary[]>([]);
   const [listLoading, setListLoading] = useState(true);
 
@@ -119,11 +162,17 @@ export default function ReaderPage({ accent, onToast, onChanged, active }: Props
   // --- 选中句子后的操作条（翻译 / 加入句子本）---
   /** 当前选中的文本（空 = 没选中） */
   const [picked, setPicked] = useState("");
+  /** 浮条落点；选中文本很长时也要算出个能用的位置 */
+  const [pickPlace, setPickPlace] = useState<PickPlacement | null>(null);
   const [pickTrans, setPickTrans] = useState<string | null>(null);
   const [pickBusy, setPickBusy] = useState<"translate" | "save" | null>(null);
 
   // 词卡
   const [sheetOpen, setSheetOpen] = useState(false);
+  /** 本篇速记（这篇文章收藏的生词 / 生句）是否打开 */
+  const [picksOpen, setPicksOpen] = useState(false);
+  /** 本次词卡从哪边出来（auto 时按点词的左右半屏算） */
+  const [sheetSide, setSheetSide] = useState<SheetSide>("bottom");
   const [sheetLoading, setSheetLoading] = useState(false);
   const [sheetError, setSheetError] = useState<string | null>(null);
   const [lookup, setLookup] = useState<WordLookup | null>(null);
@@ -151,15 +200,51 @@ export default function ReaderPage({ accent, onToast, onChanged, active }: Props
     void loadList();
   }, [loadList]);
 
-  // 阅读视图打开时，Android 返回键先回列表，而不是退出 App。
+  /** 滚动容器（App 里那个 .app-body）；列表与文章共用它 */
+  const scroller = () => document.querySelector<HTMLElement>(".app-body");
+  /** 进文章前记下的列表滚动位置 */
+  const listScroll = useRef(0);
+  /** 待还原的列表位置（null = 不需要还原） */
+  const pendingRestore = useRef<number | null>(null);
+
+  const closeArticle = useCallback(() => {
+    // 返回列表时回到「我刚才点的那篇」所在的位置，而不是正文里的那个偏移量
+    pendingRestore.current = listScroll.current;
+    setArticle(null);
+  }, []);
+
+  const clearPick = useCallback(() => {
+    window.getSelection()?.removeAllRanges();
+    setPicked("");
+    setPickPlace(null);
+  }, []);
+
+  // 返回键优先级：本篇速记 → 词卡 → 选中浮条 → 文章列表。
   // 必须带上 `active`：切到别的 tab 时本页只是被 display 隐藏，不该再拦返回键。
   useBackGuard(
-    article !== null && active,
-    useCallback(() => setArticle(null), []),
+    (article !== null || sheetOpen || picksOpen) && active,
+    useCallback(() => {
+      if (picksOpen) {
+        setPicksOpen(false);
+        return;
+      }
+      if (sheetOpen) {
+        setSheetOpen(false);
+        return;
+      }
+      if (picked) {
+        clearPick();
+        return;
+      }
+      closeArticle();
+    }, [picksOpen, sheetOpen, picked, clearPick, closeArticle]),
   );
 
   const openArticle = useCallback(
     async (id: string) => {
+      // 先记位置再切：切完列表 DOM 就没了，读不到 scrollTop
+      listScroll.current = scroller()?.scrollTop ?? 0;
+      pendingRestore.current = null;
       try {
         const detail = await api.getArticle(id);
         setArticle(detail);
@@ -170,6 +255,9 @@ export default function ReaderPage({ accent, onToast, onChanged, active }: Props
         setTitleTranslating(false);
         setSheetOpen(false);
         setLookup(null);
+        setPicksOpen(false);
+        // 打开的是一篇新文章，从头读（不沿用列表那个偏移量，否则会停在正文中间）
+        requestAnimationFrame(() => scroller()?.scrollTo({ top: 0 }));
       } catch (e) {
         onToast(`打开文章失败：${e}`);
       }
@@ -177,10 +265,31 @@ export default function ReaderPage({ accent, onToast, onChanged, active }: Props
     [onToast],
   );
 
+  // 回到列表后还原滚动位置。
+  // 双 rAF：等列表真正渲染出来再设 scrollTop，否则会被当成「超出内容高度」钳成 0。
+  useEffect(() => {
+    if (article !== null) return;
+    const top = pendingRestore.current;
+    if (top === null) return;
+    pendingRestore.current = null;
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => scroller()?.scrollTo({ top })),
+    );
+  }, [article]);
+
   const openWord = useCallback(
     // 只传单词：不再为每个词请求它在文中的那句话译文
     // （词卡里那块「文中」已经按要求去掉了，少一次网络往返）
-    async (word: string) => {
+    async (word: string, clientX?: number) => {
+      // auto：点屏幕左半边的词 → 卡片贴右边出；点右半边 → 贴左边出。
+      // 这样卡片天然避开手指和正在读的那一行。
+      const resolved: SheetSide =
+        cardSide === "auto"
+          ? (clientX ?? 0) < window.innerWidth / 2
+            ? "right"
+            : "left"
+          : cardSide;
+      setSheetSide(resolved);
       const seq = ++lookupSeq.current;
       setSheetOpen(true);
       setSheetLoading(true);
@@ -197,7 +306,7 @@ export default function ReaderPage({ accent, onToast, onChanged, active }: Props
         if (seq === lookupSeq.current) setSheetLoading(false);
       }
     },
-    [],
+    [cardSide],
   );
 
   const toggleTranslation = useCallback(
@@ -346,37 +455,46 @@ export default function ReaderPage({ accent, onToast, onChanged, active }: Props
   }, [article, titleTrans, onToast]);
 
   /**
-   * 监听 WebView 的文本选择：选中一句就在底部弹操作条。
+   * 监听 WebView 的文本选择：选中就弹操作条。
    *
    * 只读取选区、**不拦系统菜单** —— 「复制 / 分享 / 网页搜索」继续可用。
-   * 过滤掉没空格的（单词，交给点词查词）和超长的（多半是整段误选）。
+   * 只过滤没空格的（单个单词，交给点词查词）；**不限长度**：
+   * 原先卡在 300 字，长句反而弹不出「翻译 / 句子本」，跟功能目的相反。
    */
   useEffect(() => {
     if (!article) {
       setPicked("");
+      setPickPlace(null);
       return;
     }
-    const onSelectionChange = () => {
-      const text = window.getSelection()?.toString().trim() ?? "";
-      if (!text || text.length > 300 || !text.includes(" ")) {
+    const sync = () => {
+      const sel = window.getSelection();
+      const text = sel ? sel.toString().trim() : "";
+      if (!sel || sel.rangeCount === 0 || !text || !text.includes(" ")) {
         setPicked("");
+        setPickPlace(null);
         return;
       }
+      const rect = sel.getRangeAt(0).getBoundingClientRect();
       setPicked((prev) => (prev === text ? prev : text));
+      setPickPlace(pickPlacement(rect));
     };
-    document.addEventListener("selectionchange", onSelectionChange);
-    return () => document.removeEventListener("selectionchange", onSelectionChange);
+    document.addEventListener("selectionchange", sync);
+    // 滚动/转屏后选区在屏幕上会移动，浮条得跟着，否则会飘在原来的地方
+    const body = document.querySelector(".app-body");
+    body?.addEventListener("scroll", sync, { passive: true });
+    window.addEventListener("resize", sync);
+    return () => {
+      document.removeEventListener("selectionchange", sync);
+      body?.removeEventListener("scroll", sync);
+      window.removeEventListener("resize", sync);
+    };
   }, [article]);
 
   // 选区一变，上一次的译文就作废
   useEffect(() => {
     setPickTrans(null);
   }, [picked]);
-
-  const clearPick = useCallback(() => {
-    window.getSelection()?.removeAllRanges();
-    setPicked("");
-  }, []);
 
   const translatePick = useCallback(async () => {
     if (!picked) return;
@@ -405,7 +523,7 @@ export default function ReaderPage({ accent, onToast, onChanged, active }: Props
           /* 忽略：只存原文 */
         }
       }
-      const result = await api.addLocalSentence(picked, trans ?? null);
+      const result = await api.addLocalSentence(picked, trans ?? null, article?.id ?? null);
       onToast(result.existed ? "这句已在句子本里，已刷新译文" : "已加入句子本");
       onChanged();
       clearPick();
@@ -414,7 +532,7 @@ export default function ReaderPage({ accent, onToast, onChanged, active }: Props
     } finally {
       setPickBusy(null);
     }
-  }, [picked, pickTrans, onToast, onChanged, clearPick]);
+  }, [picked, pickTrans, article, onToast, onChanged, clearPick]);
 
   // 按钮文字写成函数而不是嵌套三元：oxlint 的 no-nested-ternary / readability 都把嵌套三元当问题
   function titleButtonLabel(): string {
@@ -440,10 +558,14 @@ export default function ReaderPage({ accent, onToast, onChanged, active }: Props
     return (
       <div className="reader">
         <div className="reader-head">
-          <button className="btn ghost small" onClick={() => setArticle(null)}>
+          <button className="btn ghost small" onClick={closeArticle}>
             ← 文章
           </button>
-          <span className="muted">点单词查词 · 点「译」出译文</span>
+          <span className="muted reader-tip">点词查词 · 点「译」出译文</span>
+          {/* 右上角「速记」：只看这篇收藏的生词与生句 */}
+          <button className="btn ghost small" onClick={() => setPicksOpen(true)}>
+            速记
+          </button>
         </div>
 
         <div className="reader-title-row">
@@ -476,22 +598,36 @@ export default function ReaderPage({ accent, onToast, onChanged, active }: Props
               shown={Boolean(shown[index])}
               translating={translating === index}
               onToggle={() => void toggleTranslation(index, text)}
-              onWord={(word) => void openWord(word)}
+              onWord={(word, clientX) => void openWord(word, clientX)}
             />
           ))}
         </div>
 
-        {/* 选中句子后的操作条：翻译 / 加入句子本（与系统选择菜单共存） */}
-        {picked && (
-          <div className="pick-bar">
-            <div className="pick-body">
-              <div className="pick-text">{picked}</div>
-              {pickTrans && <div className="pick-trans">{pickTrans}</div>}
-            </div>
-            <div className="pick-actions">
+        {/* 选中后的操作条：浮在选区旁（下方优先），与系统「复制/分享」菜单共存 */}
+        {picked && pickPlace && (
+          <div
+            className={`pick-bar ${pickPlace.place}${pickTrans ? " open" : ""}`}
+            style={
+              pickPlace.place === "below"
+                ? ({
+                    top: pickPlace.top,
+                    // 给 CSS 算 max-height 用（展开译文时不要超出屏幕）
+                    "--pick-top": `${pickPlace.top}px`,
+                  } as React.CSSProperties)
+                : pickPlace.place === "above"
+                  ? ({
+                      bottom: pickPlace.bottom,
+                      "--pick-bottom": `${pickPlace.bottom}px`,
+                    } as React.CSSProperties)
+                  : undefined
+            }
+          >
+            <div className="pick-row">
+              {/* onPointerDown 拦一下：否则点按钮会先清掉选区，浮条自己就消失了 */}
               <button
                 className="btn ghost small"
                 disabled={pickBusy !== null}
+                onPointerDown={(e) => e.preventDefault()}
                 onClick={() => void translatePick()}
               >
                 {pickTranslateLabel()}
@@ -499,18 +635,27 @@ export default function ReaderPage({ accent, onToast, onChanged, active }: Props
               <button
                 className="btn small"
                 disabled={pickBusy !== null}
+                onPointerDown={(e) => e.preventDefault()}
                 onClick={() => void savePick()}
               >
                 {pickBusy === "save" ? <span className="spinner" /> : "＋ 句子本"}
               </button>
+              <span className="pick-len muted">{picked.length} 字</span>
               <button
                 className="btn ghost small"
+                onPointerDown={(e) => e.preventDefault()}
                 onClick={clearPick}
                 aria-label="取消选择"
               >
                 ✕
               </button>
             </div>
+            {pickTrans && (
+              <div className="pick-body">
+                <div className="pick-text">{picked}</div>
+                <div className="pick-trans">{pickTrans}</div>
+              </div>
+            )}
           </div>
         )}
 
@@ -520,9 +665,20 @@ export default function ReaderPage({ accent, onToast, onChanged, active }: Props
             error={sheetError}
             lookup={lookup}
             accent={accent}
+            side={sheetSide}
+            articleId={article.id}
             onClose={() => setSheetOpen(false)}
             onToast={onToast}
             onAdded={onChanged}
+          />
+        )}
+
+        {picksOpen && (
+          <ArticlePicks
+            articleId={article.id}
+            articleTitle={article.title}
+            onClose={() => setPicksOpen(false)}
+            onToast={onToast}
           />
         )}
       </div>
@@ -652,7 +808,7 @@ function ParagraphBlock({
   shown: boolean;
   translating: boolean;
   onToggle: () => void;
-  onWord: (word: string, sentence: string) => void;
+  onWord: (word: string, clientX: number) => void;
 }) {
   const tokens = useMemo(() => tokenize(text), [text]);
 
@@ -664,7 +820,7 @@ function ParagraphBlock({
             <span
               key={i}
               className={keywords.has(token.text.toLowerCase()) ? "rw kw" : "rw"}
-              onClick={() => onWord(token.text, token.sentence ?? text)}
+              onClick={(e) => onWord(token.text, e.clientX)}
             >
               {token.text}
             </span>

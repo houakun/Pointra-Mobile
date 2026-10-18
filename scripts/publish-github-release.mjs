@@ -22,7 +22,14 @@
  * 注：用 curl 而不是 node 的 fetch —— fetch 不读系统代理，国内直连 api.github.com 常失败。
  */
 import { readFile } from "node:fs/promises";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+  mkdirSync,
+  copyFileSync,
+} from "node:fs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -225,6 +232,53 @@ async function main() {
   console.log("发布完成。手机端「检查更新」现在会优先走公网：");
   console.log(`  https://github.com/${REPO}/releases/latest/download/pointra.json`);
   console.log("（电脑没开也能更新；公网不通时会自动回落电脑端）");
+
+  // 4) 同步一份到按版本命名的 CDN 分支，给 jsDelivr 用。
+  //
+  // 为什么另开分支而不是直接用 release 附件：GitHub 的附件要 302 到
+  // objects.githubusercontent.com，国内常被阻断（能检查更新但下载卡住）。
+  // 为什么分支名带版本号：jsDelivr 对 git ref 的内容有最长 12 小时缓存，
+  // 固定分支会让手机在发版后拿到旧包；新 ref 是全新 URL，无缓存问题。
+  const cdnBranch = `cdn-v${meta.version}`;
+  const cdnWork = path.join(os.homedir(), ".pointra-cdn");
+  mkdirSync(cdnWork, { recursive: true });
+  copyFileSync(apkPath, path.join(cdnWork, "pointra.apk"));
+  copyFileSync(metaPath, path.join(cdnWork, "pointra.json"));
+
+  const git = (...gitArgs) =>
+    execFileSync("git", gitArgs, {
+      cwd: cdnWork,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  try {
+    git("init", "-q");
+    git("checkout", "-q", "-B", cdnBranch);
+    git("add", "-A");
+    git(
+      "-c",
+      "user.email=release@local",
+      "-c",
+      "user.name=release",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      `cdn: ${meta.version}`,
+    );
+    try {
+      git("remote", "remove", "origin");
+    } catch {
+      /* 首次没有 remote */
+    }
+    git("remote", "add", "origin", `https://github.com/${REPO}.git`);
+    git("push", "-f", "origin", cdnBranch);
+    console.log("");
+    console.log(`CDN 分支已推送（${cdnBranch}）——手机端无需 VPN 的下载地址：`);
+    console.log(`  https://cdn.jsdelivr.net/gh/${REPO}@${cdnBranch}/pointra.apk`);
+  } catch (err) {
+    console.error(`！CDN 分支推送失败（不影响上面的 release）：${err.message}`);
+  }
 }
 
 await main();

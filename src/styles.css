@@ -884,6 +884,15 @@ select:focus {
   gap: 10px;
 }
 
+/* 中间那句提示：让位给右上角的「速记」，空间不够就省略而不是换行 */
+.reader-tip {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 /* 标题行：「译」按钮挂在标题右侧 */
 .reader-title-row {
   display: flex;
@@ -1027,6 +1036,9 @@ select:focus {
   display: flex;
   align-items: flex-end;
   z-index: 50;
+  /* 弹层盖住正文时，手指在上面滑动不得把底下的文章滚走（滚动穿透） */
+  touch-action: none;
+  overscroll-behavior: contain;
 }
 
 .sheet {
@@ -1038,6 +1050,50 @@ select:focus {
   padding: 8px 16px calc(16px + var(--safe-bottom));
   box-shadow: 0 -6px 24px rgba(18, 120, 90, 0.12);
   animation: sheetUp 0.18s ease-out;
+  /* 卡片自己可滚，但不把滚动链传给遮罩/正文 */
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+}
+
+/* 词卡出在屏幕左侧 / 右侧（设置页「阅读页词卡位置」）：
+   贴边的竖栏，只占一条边，不把正文下半屏全遮住。 */
+.sheet-mask.side-left {
+  align-items: stretch;
+  justify-content: flex-start;
+}
+
+.sheet-mask.side-right {
+  align-items: stretch;
+  justify-content: flex-end;
+}
+
+.sheet.side-left,
+.sheet.side-right {
+  width: min(86vw, 360px);
+  height: 100%;
+  max-height: 100%;
+  padding: calc(10px + var(--safe-top)) 14px calc(16px + var(--safe-bottom));
+  box-shadow: 0 0 24px rgba(18, 120, 90, 0.18);
+  animation: sheetInSide 0.18s ease-out;
+}
+
+.sheet.side-left {
+  border-radius: 0 18px 18px 0;
+}
+
+.sheet.side-right {
+  border-radius: 18px 0 0 18px;
+}
+
+@keyframes sheetInSide {
+  from {
+    transform: scale(0.98);
+    opacity: 0.6;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
 }
 
 @keyframes sheetUp {
@@ -1158,31 +1214,160 @@ select:focus {
   font-size: 17px;
 }
 
+/* --- 本篇速记（阅读页右上角）：全屏覆盖层，像进了一个子页 ----------------- */
+
+.picks {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  touch-action: none;
+}
+
+.picks-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: calc(10px + var(--safe-top)) 16px 6px;
+}
+
+.picks-title {
+  flex: 1;
+  font-size: 16px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.picks-sub {
+  padding: 0 16px 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.picks-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0 16px calc(20px + var(--safe-bottom));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
+.picks-group {
+  margin: 12px 2px 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.picks-word {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.picks-phon {
+  font-size: 12px;
+  font-weight: 400;
+}
+
 /* ---------------------------------------------------------------------------
    阅读页：选中句子后的操作条（翻译 / 加入句子本）
-   与系统的「复制/分享」菜单共存，所以固定在底部、不抢焦点。
+   与系统「复制/分享」菜单共存：浮在选区旁边（系统菜单占着选区上方，所以我们优先放下方），
+   不再钉在屏幕最底部（太远，拇指和视线都要跑一趟）。
+   纵向落点由 JS 算好后以内联 top + --pick-top 传入。
    --------------------------------------------------------------------------- */
 
 .pick-bar {
   position: fixed;
-  left: 12px;
-  right: 12px;
-  bottom: calc(12px + var(--safe-bottom));
-  z-index: 40;
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  min-width: 240px;
+  max-width: min(92vw, 560px);
+  z-index: 45;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px;
+  padding: 6px;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 12px;
   box-shadow: var(--shadow);
+  animation: pickIn 0.14s ease-out;
+}
+
+/* 展开译文后才需要变宽，收起时保持一条紧凑按钮 */
+.pick-bar.open {
+  width: min(92vw, 560px);
+}
+
+/* 落点：选区下方（默认）/ 选区上方（向上展开）/ 停到底部导航上方 */
+.pick-bar.below {
+  max-height: calc(100vh - var(--pick-top, 50vh) - 76px - var(--safe-bottom));
+}
+
+.pick-bar.above {
+  flex-direction: column-reverse;
+  max-height: calc(var(--pick-bottom, 50vh) - 84px);
+}
+
+.pick-bar.above .pick-body {
+  margin: 0 0 6px;
+  padding: 0 0 6px;
+  border-top: 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.pick-bar.dock {
+  left: 12px;
+  right: 12px;
+  transform: none;
+  width: auto;
+  bottom: calc(76px + var(--safe-bottom));
+  max-height: 42vh;
+  animation: none;
+}
+
+@keyframes pickIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%);
+  }
+}
+
+/* 一行按钮：不撑满屏宽，长句也只占一条 */
+.pick-row {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pick-len {
+  flex: 1;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 /* 选中的内容多时内部滚动，不要把整屏顶掉 */
 .pick-body {
-  max-height: 28vh;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line);
 }
 
 .pick-text {
@@ -1198,10 +1383,4 @@ select:focus {
   font-size: 14px;
   line-height: 1.7;
   color: var(--accent-2);
-}
-
-.pick-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
