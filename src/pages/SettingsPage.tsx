@@ -18,6 +18,14 @@ interface Props {
 
 export default function SettingsPage({ settings, onChange, onToast }: Props) {
   const [base, setBase] = useState(settings.pairing?.base ?? "10.0.2.2:31415");
+  /**
+   * 每日上限的输入草稿（字符串）。
+   *
+   * 直接拿 `goals.new_per_day` 当 value 的话，用户一删空就立刻被 `|| 0` 回填成 0，
+   * 永远删不干净（顶多剩下一个 0）。所以输入期间允许空字符串，失焦时才落库。
+   */
+  const [newDraft, setNewDraft] = useState(String(settings.goals.new_per_day));
+  const [reviewDraft, setReviewDraft] = useState(String(settings.goals.review_per_day));
   const [code, setCode] = useState("");
   const [deviceName, setDeviceName] = useState("Android");
   const [busy, setBusy] = useState<string | null>(null);
@@ -195,6 +203,26 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
       await api.saveSettings(next);
     } catch (e) {
       onToast(`保存失败：${e}`);
+    }
+  };
+
+  // 外部改动（重置数据）也要把草稿拉回来，否则输入框停在旧值
+  useEffect(() => {
+    setNewDraft(String(settings.goals.new_per_day));
+  }, [settings.goals.new_per_day]);
+  useEffect(() => {
+    setReviewDraft(String(settings.goals.review_per_day));
+  }, [settings.goals.review_per_day]);
+
+  /** 失焦时把草稿落库：空 → 0；负数/小数也拉回合法值 */
+  const commitGoal = async (kind: "new" | "review", raw: string) => {
+    const n = Math.max(0, Math.floor(Number(raw) || 0));
+    if (kind === "new") {
+      setNewDraft(String(n));
+      if (n !== settings.goals.new_per_day) await setGoals({ new_per_day: n });
+    } else {
+      setReviewDraft(String(n));
+      if (n !== settings.goals.review_per_day) await setGoals({ review_per_day: n });
     }
   };
 
@@ -388,8 +416,10 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
           <input
             type="number"
             min={0}
-            value={settings.goals.new_per_day}
-            onChange={(e) => setGoals({ new_per_day: Number(e.target.value) || 0 })}
+            inputMode="numeric"
+            value={newDraft}
+            onChange={(e) => setNewDraft(e.target.value)}
+            onBlur={() => void commitGoal("new", newDraft)}
           />
         </div>
         <div className="field">
@@ -397,8 +427,10 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
           <input
             type="number"
             min={0}
-            value={settings.goals.review_per_day}
-            onChange={(e) => setGoals({ review_per_day: Number(e.target.value) || 0 })}
+            inputMode="numeric"
+            value={reviewDraft}
+            onChange={(e) => setReviewDraft(e.target.value)}
+            onBlur={() => void commitGoal("review", reviewDraft)}
           />
         </div>
         <div className="muted">修改后立即生效，无需重启。</div>

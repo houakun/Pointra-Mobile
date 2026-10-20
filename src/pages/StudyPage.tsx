@@ -14,6 +14,12 @@ const STUDY_GRADE = { AGAIN: 0, GOOD: 1, TOO_EASY: 2 } as const;
 const SWIPE_PX = 60;
 /** 判定主轴的最小位移：小于它就当成「点按」 */
 const AXIS_PX = 10;
+/**
+ * 屏幕左右边缘留出的宽度：从边缘起手的滑动是**系统返回手势**（向内滑），
+ * 不参与切卡 —— 否则用户想退出学习页，结果变成了“上一张/下一张”，
+ * 连顶部进度都跟着变。
+ */
+const EDGE_PX = 28;
 
 export default function StudyPage({ settings, onExit, onToast }: Props) {
   const [queue, setQueue] = useState<QueueEntry[]>([]);
@@ -45,13 +51,22 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
   const total = queue.length;
   const current = queue[index] ?? null;
 
+  /**
+   * 「进入本轮之前，今天已经学完多少张」。
+   *
+   * 退出学习页再进来时队列会重新组装（已评分的卡不再入队），
+   * 光看本轮 index 会从 0 开始，看起来像“进度全丢了”。
+   * 拿今日已完成量做基线，进度条就接得上（5/20 → 继续）。
+   */
+  const [doneBefore, setDoneBefore] = useState(0);
+
   useEffect(() => {
     let alive = true;
-    api
-      .buildQueue()
-      .then((q) => {
+    Promise.all([api.buildQueue(), api.getProgress()])
+      .then(([q, p]) => {
         if (!alive) return;
         setQueue(q);
+        setDoneBefore(p.review_done + p.new_done);
         setLoading(false);
       })
       .catch((e) => {
@@ -194,7 +209,11 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
   // 不给容器 setPointerCapture：否则 click 会被重定向到容器，按钮点不动。
   // 容器是全屏的，不捕获也能拿到冒泡上来的 pointerup。
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    gesture.current = { x: e.clientX, y: e.clientY, dx: 0, dy: 0, axis: "none" };
+    // 从屏幕边缘起手的是系统返回手势，本条手势不参与切卡（系统会关掉学习页）
+    const fromEdge = e.clientX < EDGE_PX || e.clientX > window.innerWidth - EDGE_PX;
+    gesture.current = fromEdge
+      ? null
+      : { x: e.clientX, y: e.clientY, dx: 0, dy: 0, axis: "none" };
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -256,7 +275,9 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
     );
   }
 
-  const pct = total === 0 ? 0 : Math.round((index / total) * 100);
+  // 进度按「今日整体」算：进入前已完成的 + 本轮已过的，退出再进不归零
+  const grandTotal = doneBefore + total;
+  const pct = grandTotal === 0 ? 0 : Math.round(((doneBefore + index) / grandTotal) * 100);
 
   return (
     <div
@@ -278,7 +299,7 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
           <i style={{ width: `${pct}%` }} />
         </div>
         <span>
-          {Math.min(index + 1, total)}/{total}
+          {Math.min(doneBefore + index + 1, grandTotal)}/{grandTotal}
         </span>
       </div>
 

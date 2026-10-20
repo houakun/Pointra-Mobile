@@ -573,7 +573,9 @@ select:focus {
   left: 50%;
   transform: translateX(-50%);
   bottom: calc(76px + var(--safe-bottom));
-  background: rgba(255, 255, 255, 0.98);
+  /* 不能写死白底：深色主题下文字用 --text（浅色），白底浅字直接看不见。
+     统一跟 panel 走，两种主题都对。 */
+  background: var(--panel);
   border: 1px solid var(--line);
   color: var(--text);
   padding: 10px 16px;
@@ -582,7 +584,7 @@ select:focus {
   z-index: 100;
   max-width: 86vw;
   text-align: center;
-  box-shadow: 0 8px 24px rgba(18, 80, 60, 0.14);
+  box-shadow: var(--shadow);
 }
 
 .empty {

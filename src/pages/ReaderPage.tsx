@@ -160,6 +160,45 @@ function monthLabel(key: string): string {
   return `${year} 年 · ${Number(month)} 月`;
 }
 
+/** 文章内阅读位置（按文章 id 存 localStorage，退出 App 再进也能接着看） */
+const POS_KEY = "pointra:article-pos:v1";
+/** 最多记这么多篇，避免无限增长 */
+const POS_MAX = 60;
+
+function readPositions(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(POS_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === "object"
+      ? (parsed as Record<string, number>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function readArticlePos(id: string): number {
+  const top = readPositions()[id];
+  return typeof top === "number" && top > 0 ? top : 0;
+}
+
+function saveArticlePos(id: string, top: number) {
+  if (!id) return;
+  try {
+    const map = readPositions();
+    map[id] = Math.max(0, Math.round(top));
+    // 只保留最近 POS_MAX 篇（对象键顺序 = 写入顺序）
+    const keys = Object.keys(map);
+    for (const key of keys.slice(0, Math.max(0, keys.length - POS_MAX))) {
+      delete map[key];
+    }
+    localStorage.setItem(POS_KEY, JSON.stringify(map));
+  } catch {
+    // localStorage 满/不可用：记不住位置不影响阅读
+  }
+}
+
 export default function ReaderPage({ accent, onToast, onChanged, active }: Props) {
   const [articles, setArticles] = useState<ArticleSummary[]>([]);
   const [listLoading, setListLoading] = useState(true);
@@ -227,12 +266,14 @@ export default function ReaderPage({ accent, onToast, onChanged, active }: Props
   const pendingRestore = useRef<number | null>(null);
 
   const closeArticle = useCallback(() => {
-    // 返回列表时回到「我刚才点的那篇」所在的位置，而不是正文里的那个偏移量
+    // 先记下这篇读到哪了（下次点开同一篇能接着看），再切回列表
+    if (article) saveArticlePos(article.id, scroller()?.scrollTop ?? 0);
     articleReqId.current += 1; // 作废仍在路上的打开请求
     setOpeningId(null);
+    // 返回列表时回到「我刚才点的那篇」所在的位置，而不是正文里的那个偏移量
     pendingRestore.current = listScroll.current;
     setArticle(null);
-  }, []);
+  }, [article]);
 
   /** 进入某个月份：记住网格位置，新页从顶部开始读 */
   const openMonth = useCallback((key: string) => {
@@ -310,8 +351,7 @@ export default function ReaderPage({ accent, onToast, onChanged, active }: Props
         setSheetOpen(false);
         setLookup(null);
         setPicksOpen(false);
-        // 打开的是一篇新文章，从头读（不沿用列表那个偏移量，否则会停在正文中间）
-        requestAnimationFrame(() => scroller()?.scrollTo({ top: 0 }));
+        // 位置不在这里设：交给下面的「恢复上次阅读位置」effect
       } catch (e) {
         if (seq === articleReqId.current) onToast(`打开文章失败：${e}`);
       } finally {
@@ -331,6 +371,47 @@ export default function ReaderPage({ accent, onToast, onChanged, active }: Props
     requestAnimationFrame(() =>
       requestAnimationFrame(() => scroller()?.scrollTo({ top })),
     );
+  }, [article]);
+
+  /** 正在恢复位置：这段时间里的 scroll 事件不要回写，否则会把值改掉 */
+  const restoringPos = useRef(false);
+
+  // 打开文章后回到上次读到的位置（退出 App 再进也算，位置存在 localStorage）。
+  // 同样用双 rAF：等正文挂上去再设 scrollTop，否则会被钳成 0。
+  useEffect(() => {
+    if (!article) return;
+    const saved = readArticlePos(article.id);
+    restoringPos.current = true;
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        scroller()?.scrollTo({ top: saved });
+        // 再多等一帧才放开“保存”，避开恢复自身触发的 scroll
+        requestAnimationFrame(() => {
+          restoringPos.current = false;
+        });
+      }),
+    );
+  }, [article]);
+
+  // 滚动时记下位置：节流 400ms（每帧写 localStorage 太浪费）
+  useEffect(() => {
+    if (!article) return;
+    const body = document.querySelector(".app-body");
+    if (!body) return;
+    let timer: number | null = null;
+    const onScroll = () => {
+      if (restoringPos.current) return;
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = null;
+        saveArticlePos(article.id, body.scrollTop);
+      }, 400);
+    };
+    body.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      body.removeEventListener("scroll", onScroll);
+      if (timer !== null) window.clearTimeout(timer);
+    };
   }, [article]);
 
   const openWord = useCallback(
