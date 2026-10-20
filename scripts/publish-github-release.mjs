@@ -303,14 +303,56 @@ async function main() {
     // 固定分支的代价是 jsDelivr 对 ref 有最长 12 小时缓存，所以推完必须 purge。
     const latestBranch = "cdn-latest";
     pushBranch(latestBranch, `cdn latest: ${meta.version}`);
+    // purge 必须重试到 finished：jsDelivr 对分支 ref 有最长 12 小时缓存，
+    // 刷不掉就会出现「手机端检查更新拿到的还是上一个版本 → 误报已是最新」（真实踩到过）。
     for (const file of ["pointra.json", "pointra.apk"]) {
       const purgeUrl = `https://purge.jsdelivr.net/gh/${REPO}@${latestBranch}/${file}`;
-      try {
-        execFileSync("curl", ["-sS", "--max-time", "20", purgeUrl], { encoding: "utf8" });
-      } catch (err) {
-        console.error(`！刷新 CDN 缓存失败（${file}）：${err.message}`);
+      let done = false;
+      for (let attempt = 1; attempt <= 3 && !done; attempt++) {
+        try {
+          const out = execFileSync("curl", ["-sS", "--max-time", "25", purgeUrl], {
+            encoding: "utf8",
+          });
+          if (/"status"\s*:\s*"finished"/.test(out)) {
+            console.log(`  已刷新 CDN 缓存：${file}`);
+            done = true;
+          } else {
+            console.log(`  CDN 刷新未完成（第 ${attempt} 次），重试…`);
+          }
+        } catch (err) {
+          console.error(`！刷新 CDN 缓存失败（${file}）：${err.message}`);
+        }
+        if (!done) await new Promise((r) => setTimeout(r, 2500));
+      }
+      if (!done) {
+        console.error(`！${file} 的 CDN 缓存可能仍是旧内容（purge 三次都没完成）`);
       }
     }
+
+    // 回读校验：确认 cdn-latest 真的指向本次版本，别让手机端拿到旧值
+    try {
+      const readback = execFileSync(
+        "curl",
+        [
+          "-sS",
+          "--max-time",
+          "20",
+          `https://cdn.jsdelivr.net/gh/${REPO}@${latestBranch}/pointra.json`,
+        ],
+        { encoding: "utf8" },
+      );
+      const seen = /"version"\s*:\s*"([^"]+)"/.exec(readback)?.[1];
+      if (seen === meta.version) {
+        console.log(`  CDN 回读校验：${seen} ✓`);
+      } else {
+        console.error(
+          `！CDN 回读是 ${seen ?? "?"}，与本次发布的 ${meta.version} 不一致（可能仍是旧缓存）`,
+        );
+      }
+    } catch (err) {
+      console.error(`！CDN 回读失败：${err.message}`);
+    }
+
     console.log(
       `固定分支已推送并刷新缓存（${latestBranch}）——检查更新走这个源：\n` +
         `  https://cdn.jsdelivr.net/gh/${REPO}@${latestBranch}/pointra.json`,

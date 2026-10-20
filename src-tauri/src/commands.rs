@@ -943,6 +943,23 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// 探测候选必须覆盖「patch 递增」和「下一个小版本」，否则跨版本发版时会查不到新版。
+    #[test]
+    fn version_candidates_cover_patch_and_next_minor() {
+        assert_eq!(
+            version_candidates("0.6.2"),
+            ["0.6.3", "0.6.4", "0.6.5", "0.6.6", "0.7.0"]
+                .map(String::from)
+                .to_vec()
+        );
+        assert_eq!(
+            version_candidates("1.9.9"),
+            ["1.9.10", "1.9.11", "1.9.12", "1.9.13", "1.10.0"]
+                .map(String::from)
+                .to_vec()
+        );
+    }
+
     /// 防回归：前端 `api.ts` 里 invoke 的每个命令，都必须在命令注册块里登记。
     ///
     /// 踩过：新加了 `list_article_picks` 命令与前端调用，却忘了登记 ——
@@ -1116,6 +1133,27 @@ fn cdn_apk_url(version: &str) -> String {
     format!("https://cdn.jsdelivr.net/gh/houakun/Pointra-Mobile@cdn-v{version}/pointra.apk")
 }
 
+/// 专属版本分支的元数据地址。
+///
+/// `cdn-v0.6.4` 这种 ref 是**全新 URL**，不会命中 jsDelivr 对 `cdn-latest` 的 12 小时缓存，
+/// 所以它是唯一能保证「查到就是最新」的路径（实测：purge 后 cdn-latest 仍可能回旧值）。
+fn cdn_meta_url(version: &str) -> String {
+    format!("https://cdn.jsdelivr.net/gh/houakun/Pointra-Mobile@cdn-v{version}/pointra.json")
+}
+
+/// 从当前版本往上猜几个「可能已发布」的版本号。
+///
+/// 我们一直按 patch 递增发版（0.6.2 → 0.6.3 → 0.6.4），顺带覆盖下一个小版本，
+/// 免得跨 minor 时漏掉。不存在的候选会立刻 404，并行探测不会拖慢整体。
+fn version_candidates(current: &str) -> Vec<String> {
+    let (maj, min, patch) = parse_version(current);
+    let mut out: Vec<String> = (1..=4)
+        .map(|i| format!("{maj}.{min}.{}", patch + i))
+        .collect();
+    out.push(format!("{maj}.{}.0", min + 1));
+    out
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateInfo {
     pub version: String,
@@ -1211,17 +1249,26 @@ async fn fetch_online_meta(
     who: &str,
     url: &str,
 ) -> Result<Option<UpdateInfo>, String> {
+    fetch_meta_owned(app, who.to_string(), url.to_string()).await
+}
+
+/// 同 `fetch_online_meta`，但接收拥有所有权的字符串（探测候选多了要动态拼 URL）。
+async fn fetch_meta_owned(
+    app: &AppHandle,
+    who: String,
+    url: String,
+) -> Result<Option<UpdateInfo>, String> {
     // 诊断日志（Android 上会进 logcat）：更新走不通时要能看出卡在哪一步。
     println!("[pointra-update] {who}：检查 {url}");
     let resp = update_client()?
-        .get(url)
+        .get(&url)
         .timeout(std::time::Duration::from_secs(8))
         .send()
         .await
-        .map_err(|e| net_error_text(&e, who))?;
+        .map_err(|e| net_error_text(&e, &who))?;
     println!("[pointra-update] {who}：响应 {}", resp.status());
 
-    // 404 = 仓库还没发过 release，或附件名不对（不算错误，交给别的源/电脑端）
+    // 404 = 这个源上没有（候选分支未发布 / 仓库还没发过 release）
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
@@ -1242,28 +1289,80 @@ async fn fetch_online_meta(
 /// 并行问两个公网源，**谁先给出结论就用谁**（GitHub 优先，它是发布源头）。
 ///
 /// 为什么不用 `join!`：它要等两个 future 都结束 —— GitHub 在国内常被阻断，
-/// 单次要等满 8 秒超时，那即使 CDN 一秒就回了，用户还是得干等 8 秒。
-/// 用 `select_ok` 拿到第一个«通»的结果就返回（另一个请求会被直接丢弃）。
+/// 但「先到先用」有个真实问题：jsDelivr 的固定分支有最长 12 小时缓存，发布脚本
+/// 虽会调 purge，个别边缘节点仍可能回旧内容 —— GitHub 被阻断 + CDN 回旧版，
+/// 就会误报「已是最新」，用户永远看不到新版本。
+/// 所以现在在预算内收集**所有**能拿到的结果，**取版本号最高的那个**；
+/// 预算 4.5 秒：正常两个源秒回，GitHub 被阻断时也不会又白等满 8 秒。
 async fn check_update_online(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
+    use futures_util::stream::{FuturesUnordered, StreamExt as _};
     use std::future::Future;
     use std::pin::Pin;
+    use tokio::time::{Duration, Instant};
 
-    // 两个 async fn 调用返回不同的不透明类型，装箱成同一个 trait object 才能放进 select_ok
+    // 两个 async fn 调用返回不同的不透明类型，装箱成同一个 trait object 才能放进集合
     type MetaFut<'a> =
         Pin<Box<dyn Future<Output = Result<Option<UpdateInfo>, String>> + Send + 'a>>;
-    let futures: Vec<MetaFut<'_>> = vec![
-        Box::pin(fetch_online_meta(app, "GitHub", ONLINE_META_URL)),
-        Box::pin(fetch_online_meta(app, "CDN", CDN_META_URL)),
-    ];
+    let mut futs: FuturesUnordered<MetaFut<'_>> = FuturesUnordered::new();
+    futs.push(Box::pin(fetch_online_meta(app, "GitHub", ONLINE_META_URL)));
+    futs.push(Box::pin(fetch_online_meta(app, "CDN", CDN_META_URL)));
 
-    match futures_util::future::select_ok(futures).await {
-        // 第一个通的源给了结论：有新版本 / 已是最新
-        Ok((Some(info), _)) => Ok(Some(info)),
-        // 有源是通的，但还没发布过 release
-        Ok((None, _)) => Ok(None),
-        // 两个源都不通：各自的具体原因已经写进 logcat，界面只给一句人话
-        Err(_) => Err("连不上更新服务器（GitHub 和 CDN 都试过了）".to_string()),
+    // 再加几路「专属版本分支」探测：cdn-v<版本> 是全新 ref，不会命中 12 小时旧缓存，
+    // 这是 jsDelivr 上唯一能保证「查到就是最新」的路径（cdn-latest 实测 purge 后仍会回旧值）。
+    // 不存在的候选立刻 404，并行探测不会拖慢整体。
+    let current = app.package_info().version.to_string();
+    let candidates = version_candidates(&current);
+    let candidate_count = candidates.len();
+    for v in candidates {
+        let url = cdn_meta_url(&v);
+        futs.push(Box::pin(fetch_meta_owned(app, format!("CDN {v}"), url)));
     }
+
+    let mut remaining = 2 + candidate_count;
+    // 首次探测要等 jsDelivr 回源（实测 10 秒级），给 16 秒预算；
+    // 分支内容被缓存后再查就很快（1~2 秒）
+    let deadline = Instant::now() + Duration::from_millis(16_000);
+    let mut best: Option<UpdateInfo> = None;
+    let mut any_ok = false;
+    let mut errors: Vec<String> = Vec::new();
+
+    while remaining > 0 {
+        let next = match tokio::time::timeout_at(deadline, futs.next()).await {
+            Ok(v) => v,
+            // 超出预算：剩下的源不等了，用已拿到的结论
+            Err(_) => break,
+        };
+        let Some(res) = next else { break };
+        remaining -= 1;
+        match res {
+            Ok(Some(info)) => {
+                any_ok = true;
+                // 数字比大小，不靠字符串：取真正更新的那个（CDN 缓存旧了也不会盖掉新版）
+                let better = best
+                    .as_ref()
+                    .is_none_or(|b| parse_version(&info.version) > parse_version(&b.version));
+                if better {
+                    best = Some(info);
+                }
+            }
+            // 这个源是通的，只是还没发布过 release
+            Ok(None) => any_ok = true,
+            Err(err) => errors.push(err),
+        }
+    }
+
+    if let Some(info) = best {
+        return Ok(Some(info));
+    }
+    // 有源通了，但都是「没发布」的结论
+    if any_ok {
+        return Ok(None);
+    }
+    if errors.is_empty() {
+        return Err("连不上更新服务器".to_string());
+    }
+    // 各源的具体原因已写进 logcat，界面只给一句人话
+    Err("连不上更新服务器（GitHub 和 CDN 都试过了）".to_string())
 }
 
 /// 问电脑端有没有新版本。`Ok(None)` = 电脑端还没发布（http 404）。
