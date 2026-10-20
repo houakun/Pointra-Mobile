@@ -21,6 +21,51 @@ const AXIS_PX = 10;
  */
 const EDGE_PX = 28;
 
+/**
+ * 学习位置（当日最近看到的那张卡）。
+ *
+ * 退出学习页再点「开始学习」时，队列会重新组装（已评分的卡不再入队），
+ * 只靠 index 就会从第一张重来。记住这张卡的 id，回来时把 index 放到它身上。
+ */
+const STUDY_POS_KEY = "pointra:study-pos:v1";
+
+/** 本地日期键，只用来判断「是不是同一天」 */
+function todayKey(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+
+function readStudyPos(): { day: string; kind: string; id: string } | null {
+  try {
+    const raw = localStorage.getItem(STUDY_POS_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    const pos = parsed as { day?: unknown; kind?: unknown; id?: unknown };
+    if (
+      typeof pos.day !== "string" ||
+      typeof pos.kind !== "string" ||
+      typeof pos.id !== "string"
+    ) {
+      return null;
+    }
+    return { day: pos.day, kind: pos.kind, id: pos.id };
+  } catch {
+    return null;
+  }
+}
+
+function saveStudyPos(entry: QueueEntry) {
+  try {
+    localStorage.setItem(
+      STUDY_POS_KEY,
+      JSON.stringify({ day: todayKey(), kind: entry.kind, id: entry.id }),
+    );
+  } catch {
+    // 存不下也不影响学习
+  }
+}
+
 export default function StudyPage({ settings, onExit, onToast }: Props) {
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const [index, setIndex] = useState(0);
@@ -59,6 +104,12 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
    * 拿今日已完成量做基线，进度条就接得上（5/20 → 继续）。
    */
   const [doneBefore, setDoneBefore] = useState(0);
+  /**
+   * 本轮已经评分过的张数。
+   *
+   * 进度只跟它走：左右滑动只是「看一眼别的卡」，并没有学，不该让进度条动。
+   */
+  const [graded, setGraded] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -67,6 +118,12 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
         if (!alive) return;
         setQueue(q);
         setDoneBefore(p.review_done + p.new_done);
+        // 回到上次看到的那张卡（同一天、且它还在队列里）
+        const saved = readStudyPos();
+        if (saved && saved.day === todayKey()) {
+          const pos = q.findIndex((e) => e.kind === saved.kind && e.id === saved.id);
+          if (pos > 0) setIndex(pos);
+        }
         setLoading(false);
       })
       .catch((e) => {
@@ -88,6 +145,8 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
     let alive = true;
     // 换了卡：重置「已记不认识」状态
     gradedAgain.current = false;
+    // 记住「现在看到哪张」：退出再进来能接着这张，而不是从第一张重来
+    saveStudyPos(current);
     api
       .getCard(current.kind, current.id)
       .then((c) => {
@@ -188,6 +247,8 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
           return;
         }
         gradedAgain.current = true;
+        // 这张算学过了：进度条 +1（滑动浏览不加）
+        setGraded((n) => n + 1);
       }
       setRevealed(true);
       return;
@@ -202,6 +263,8 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
         onToast(`保存失败：${e}`);
         return;
       }
+      // 评分成功才算学完一张（Again 已计过，不重复加）
+      setGraded((n) => n + 1);
     }
     advance(gradedAgain.current);
   };
@@ -275,9 +338,10 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
     );
   }
 
-  // 进度按「今日整体」算：进入前已完成的 + 本轮已过的，退出再进不归零
+  // 进度只跟「已评分张数」走：左右滑动浏览别的卡，进度条不动
   const grandTotal = doneBefore + total;
-  const pct = grandTotal === 0 ? 0 : Math.round(((doneBefore + index) / grandTotal) * 100);
+  const doneTotal = doneBefore + graded;
+  const pct = grandTotal === 0 ? 0 : Math.round((doneTotal / grandTotal) * 100);
 
   return (
     <div
@@ -299,7 +363,7 @@ export default function StudyPage({ settings, onExit, onToast }: Props) {
           <i style={{ width: `${pct}%` }} />
         </div>
         <span>
-          {Math.min(doneBefore + index + 1, grandTotal)}/{grandTotal}
+          {Math.min(doneTotal + 1, grandTotal)}/{grandTotal}
         </span>
       </div>
 
