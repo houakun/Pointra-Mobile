@@ -138,12 +138,15 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
     setChecking(true);
     setCheckError(null);
     try {
-      const info = await withTimeout(api.checkUpdate(), 20000, "检查更新");
+      // 30 秒：探测候选版本在慢网络下首次回源要 10 秒级（后端预算 22 秒）
+      const info = await withTimeout(api.checkUpdate(), 30000, "检查更新");
       setUpdate(info);
       if (!info) onToast("还没有发布过新版本");
       else if (!info.newer)
+        // 用**本地版本**而不是 info.version：CDN 缓存可能还停在旧版本，
+        // 把「最新 0.6.5」显示给已经装着 0.6.6 的人会让人迷惑
         onToast(
-          `已是最新版本（v${info.version}${info.source === "online" ? "，来自网络" : "，来自电脑"}）`,
+          `已是最新版本（v${version}${info.source === "online" ? "，来自网络" : "，来自电脑"}）`,
         );
       else onToast(`发现新版本 v${info.version}`);
     } catch (e) {
@@ -361,7 +364,7 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
             <div className="muted">
               {update.newer
                 ? `发现新版本 v${update.version}（${(update.size / 1048576).toFixed(1)} MB）`
-                : `最新版本 v${update.version}，已是最新`}
+                : `已是最新（当前 v${version}）`}
               {update.source === "online"
                 ? " · 来自网络"
                 : update.source === "pc"

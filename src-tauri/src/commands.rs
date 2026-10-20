@@ -1205,7 +1205,7 @@ fn update_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .user_agent("Pointra-Mobile/update-check")
         .use_preconfigured_tls(tls)
-        .connect_timeout(std::time::Duration::from_secs(8))
+        .connect_timeout(std::time::Duration::from_secs(12))
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| format!("创建网络客户端失败：{e}"))
@@ -1262,7 +1262,7 @@ async fn fetch_meta_owned(
     println!("[pointra-update] {who}：检查 {url}");
     let resp = update_client()?
         .get(&url)
-        .timeout(std::time::Duration::from_secs(8))
+        .timeout(std::time::Duration::from_secs(14))
         .send()
         .await
         .map_err(|e| net_error_text(&e, &who))?;
@@ -1319,9 +1319,9 @@ async fn check_update_online(app: &AppHandle) -> Result<Option<UpdateInfo>, Stri
     }
 
     let mut remaining = 2 + candidate_count;
-    // 首次探测要等 jsDelivr 回源（实测 10 秒级），给 16 秒预算；
-    // 分支内容被缓存后再查就很快（1~2 秒）
-    let deadline = Instant::now() + Duration::from_millis(16_000);
+    // 首次探测要等 jsDelivr 回源（慢网络实测 10 秒级），给 22 秒预算；
+    // 分支内容被缓存后再查就很快（1~2 秒）；前端 withTimeout 是 30 秒。
+    let deadline = Instant::now() + Duration::from_millis(22_000);
     let mut best: Option<UpdateInfo> = None;
     let mut any_ok = false;
     let mut errors: Vec<String> = Vec::new();
@@ -1374,7 +1374,7 @@ async fn check_update_via_pc(
     let url = format!("{}/api/app/latest", base.trim_end_matches('/'));
     let resp = update_client()?
         .get(&url)
-        .timeout(std::time::Duration::from_secs(8))
+        .timeout(std::time::Duration::from_secs(14))
         .send()
         .await
         .map_err(|e| net_error_text(&e, "电脑端"))?;
