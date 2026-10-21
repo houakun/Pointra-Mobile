@@ -13,6 +13,7 @@ import type {
   PingInfo,
   Progress,
   QueueEntry,
+  ServerHit,
   Settings,
   StateFilter,
   SyncReport,
@@ -36,6 +37,9 @@ export const api = {
   getOverview: () => invoke<Overview>("get_overview"),
 
   probeServer: (base: string) => invoke<PingInfo>("probe_server", { base }),
+  /** 扫描同网段 31415，找出正在开「手机同步」的电脑（电脑 IP 变了也能找回） */
+  scanServers: (port?: number | null) =>
+    invoke<ServerHit[]>("scan_servers", { port: port ?? null }),
   pairServer: (base: string, code: string, deviceName: string) =>
     invoke<Settings>("pair_server", { base, code, deviceName }),
   unpairServer: () => invoke<Settings>("unpair_server"),

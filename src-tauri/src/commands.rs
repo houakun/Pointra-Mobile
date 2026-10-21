@@ -121,6 +121,83 @@ pub async fn probe_server(base: String) -> Result<PingInfo, String> {
     SyncClient::new(&base).ping().await
 }
 
+/// 局域网里扫描到的一台 Pointra。
+#[derive(Debug, Clone, Serialize)]
+pub struct ServerHit {
+    /// 可直接填进「PC 地址」的形式：`192.168.1.2:31415`
+    pub base: String,
+    pub name: String,
+    pub version: String,
+    pub paired: bool,
+}
+
+/// 本机在局域网里的 IPv4（用 UDP connect 探测出口网卡，不会真的发包）。
+fn local_ipv4() -> Option<std::net::Ipv4Addr> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    match socket.local_addr().ok()?.ip() {
+        std::net::IpAddr::V4(ip) if !ip.is_loopback() => Some(ip),
+        _ => None,
+    }
+}
+
+/// 由本机 IP 推出要扫的候选地址（同 /24 网段，1~254）。
+///
+/// 抽成纯函数是为了能单测：扫描本身要联网，不适合放进单测。
+fn scan_targets(local: std::net::Ipv4Addr, port: u16) -> Vec<(String, String)> {
+    let [a, b, c, _] = local.octets();
+    (1..=254u8)
+        .map(|d| {
+            let base = format!("{a}.{b}.{c}.{d}:{port}");
+            let url = format!("http://{base}/api/ping");
+            (base, url)
+        })
+        .collect()
+}
+
+/// 局域网自动查找电脑端。
+///
+/// 为什么需要它：电脑的局域网 IP 由路由器的 DHCP 分配，重启后可能变；
+/// 手机端拿固定 IP 去连就会失败。扫一遍同网段 1~254 的 `/api/ping`，
+/// 谁应答是 Pointra 就列出来（地址变了也能一键找回）。
+///
+/// 并发 64、单请求 800ms 超时：内网不可达通常立刻 Reflection/拒绝，整轮 1~3 秒。
+#[tauri::command]
+pub async fn scan_servers(port: Option<u16>) -> Result<Vec<ServerHit>, String> {
+    use futures_util::stream::{self, StreamExt};
+
+    let port = port.unwrap_or(31415);
+    let local = local_ipv4().ok_or("拿不到本机局域网地址（确认手机连的是 WiFi）")?;
+    let targets = scan_targets(local, port);
+
+    let client = reqwest::Client::builder()
+        .user_agent("Pointra-Mobile/scan")
+        .connect_timeout(std::time::Duration::from_millis(400))
+        .timeout(std::time::Duration::from_millis(800))
+        .build()
+        .map_err(|e| format!("创建扫描客户端失败：{e}"))?;
+
+    let hits: Vec<ServerHit> = stream::iter(targets)
+        .map(|(base, url)| {
+            let client = client.clone();
+            async move {
+                let info: PingInfo = client.get(url).send().await.ok()?.json().await.ok()?;
+                Some(ServerHit {
+                    base,
+                    name: info.name,
+                    version: info.version,
+                    paired: info.paired,
+                })
+            }
+        })
+        .buffer_unordered(64)
+        .filter_map(|hit| async move { hit })
+        .collect()
+        .await;
+
+    Ok(hits)
+}
+
 #[tauri::command]
 pub async fn pair_server(
     state: State<'_, AppState>,
@@ -943,7 +1020,31 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// 探测候选必须覆盖「patch 递增」和「下一个小版本」，否则跨版本发版时会查不到新版。
+    /// 扫描目标必须覆盖整个 /24（1~254），且 base 拼接成前端可以直接填的 `ip:port`。
+    #[test]
+    fn scan_targets_covers_the_whole_slash_24() {
+        let targets = scan_targets(std::net::Ipv4Addr::new(192, 168, 1, 7), 31415);
+        assert_eq!(targets.len(), 254);
+        assert_eq!(targets[0].0, "192.168.1.1:31415");
+        assert_eq!(targets[0].1, "http://192.168.1.1:31415/api/ping");
+        assert_eq!(targets[253].0, "192.168.1.254:31415");
+    }
+    /// 真实扫一遍本机所在网段（需要电脑端开着「手机同步」）。
+    ///
+    /// 默认 `#[ignore]`：cargo test 不该依赖外部服务。手动验证：
+    /// `cargo test scan_finds_the_local_server -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn scan_finds_the_local_server() {
+        // reqwest 的 rustls 需要全局 crypto provider（生产路径在 run() 里装，测试要自己装）
+        crate::dict::ensure_crypto_provider();
+        let hits = scan_servers(Some(31415)).await.expect("扫描不应报错");
+        println!("扫到 {} 台：{hits:?}", hits.len());
+        assert!(
+            !hits.is_empty(),
+            "应扫到本机开的 Pointra（先在电脑端开启手机同步）"
+        );
+    }
     #[test]
     fn version_candidates_cover_patch_and_next_minor() {
         assert_eq!(
@@ -1618,6 +1719,7 @@ pub fn run() {
             save_settings,
             get_overview,
             probe_server,
+            scan_servers,
             pair_server,
             unpair_server,
             sync_now,

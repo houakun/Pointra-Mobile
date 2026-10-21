@@ -33,6 +33,15 @@ export interface PingInfo {
   paired: boolean;
 }
 
+/** 局域网扫描找到的一台 Pointra（`scan_servers`） */
+export interface ServerHit {
+  /** 可直接填进「PC 地址」：`192.168.1.2:31415` */
+  base: string;
+  name: string;
+  version: string;
+  paired: boolean;
+}
+
 export interface Overview {
   word_count: number;
   sentence_count: number;

@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { api } from "../api";
 import type {
   Accent,
+  ServerHit,
   Settings,
   SyncProgress,
   Theme,
@@ -64,6 +65,38 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
   }, []);
 
   const pairing = settings.pairing;
+  /** 「查找电脑」扫到的结果（null = 还没扫 / 已选用） */
+  const [hits, setHits] = useState<ServerHit[] | null>(null);
+
+  /**
+   * 扫同网段找电脑端。
+   *
+   * 电脑的局域网 IP 由路由器 DHCP 分配，重启后可能变，手机端拿旧地址去连就会失败；
+   * 扫一遍 1~254 的 31415（1~3 秒），重新找回它。
+   */
+  const scan = async () => {
+    setBusy("scan");
+    setHits(null);
+    try {
+      const list = await api.scanServers(null);
+      if (list.length === 0) {
+        onToast("同 WiFi 下没找到电脑：确认电脑端已开启「手机同步」，并放行防火墙");
+        return;
+      }
+      // 只有一台就直接填上，省一次点击
+      if (list.length === 1) {
+        setBase(list[0].base);
+        onToast(`找到 ${list[0].name}：${list[0].base}，已填入`);
+        return;
+      }
+      setHits(list);
+      onToast(`找到 ${list.length} 台，点一下选用`);
+    } catch (e) {
+      onToast(`查找失败：${e}`);
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const probe = async () => {
     setBusy("probe");
@@ -71,7 +104,8 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
       const info = await api.probeServer(base);
       onToast(`已连接 ${info.name} v${info.version}（已配对设备 ${info.paired ? "有" : "无"}）`);
     } catch (e) {
-      onToast(`${e}`);
+      // 地址很可能是因为电脑重启后 IP 变了 → 顺手提示自动查找
+      onToast(`${e}（可点「查找电脑」自动找回）`);
     } finally {
       setBusy(null);
     }
@@ -320,6 +354,9 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
           <button className="btn ghost small" disabled={busy !== null} onClick={probe}>
             测试连接
           </button>
+          <button className="btn ghost small" disabled={busy !== null} onClick={scan}>
+            {busy === "scan" ? <span className="spinner" /> : "查找电脑"}
+          </button>
           {!pairing ? (
             <button className="btn small" disabled={busy !== null} onClick={pair}>
               配对
@@ -335,6 +372,31 @@ export default function SettingsPage({ settings, onChange, onToast }: Props) {
             </>
           )}
         </div>
+
+        {/* 扫描结果：点一下就把地址填进上面的输入框 */}
+        {hits && hits.length > 0 && (
+          <div className="card" style={{ marginTop: 10, padding: "4px 14px" }}>
+            {hits.map((h) => (
+              <div className="list-item" key={h.base}>
+                <div
+                  className="main tappable"
+                  onClick={() => {
+                    setBase(h.base);
+                    setHits(null);
+                    onToast(`已填入 ${h.base}`);
+                  }}
+                >
+                  <div className="title">
+                    {h.name} v{h.version}
+                  </div>
+                  <div className="sub">
+                    {h.base} · {h.paired ? "电脑端已配对过设备" : "还没配对过"}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {busy === "sync" && (
           <div className="muted" style={{ marginTop: 10 }}>
